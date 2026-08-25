@@ -1,0 +1,34 @@
+# Web / API
+fastapi
+uvicorn[standard]
+streamlit
+
+# Database
+sqlalchemy
+chromadb
+
+# Governance / de-identification (Section 7, governance layer)
+presidio-analyzer
+presidio-anonymizer
+
+# EMR pipeline: clinical NLP (Section 3.1)
+transformers
+torch
+
+# Wearable pipeline: signal processing (Section 3.2)
+numpy
+scipy
+neurokit2
+
+# Genomics pipeline: pathway aggregation (Section 3.3)
+gseapy
+
+# Generative semantic fusion layer (Section 5)
+anthropic
+
+# Config
+python-dotenv
+
+# Testing
+pytest
+httpx

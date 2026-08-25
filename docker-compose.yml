@@ -1,0 +1,30 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-}
+
+  # Placeholder for later migration from SQLite to PostgreSQL.
+  # Uncomment and set DATABASE_URL (in .env) to something like
+  # postgresql+psycopg2://twin:twin@postgres:5432/twin to switch --
+  # no application code changes required.
+  #
+  # postgres:
+  #   image: postgres:16
+  #   environment:
+  #     POSTGRES_USER: twin
+  #     POSTGRES_PASSWORD: twin
+  #     POSTGRES_DB: twin
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+
+# volumes:
+#   postgres_data:
