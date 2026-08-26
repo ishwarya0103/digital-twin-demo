@@ -135,7 +135,17 @@ Local venv, full suite including the new wearable tests (2026-08-26):
 33 passed, 1 warning in 90.35s (0:01:30)
 ```
 `tests/test_wearable_pipeline.py` (16 tests: 1 subject-count check + 3 per-subject checks x 5
-subjects) -- PASSED. Not yet re-verified inside Docker (see Known Issues).
+subjects) -- PASSED.
+
+Docker (`docker compose build` then `docker compose run --rm app pytest -v`, 2026-08-26). No new
+image layers needed -- torch/numpy/scipy/neurokit2 were already baked in from Phase 0, so the
+rebuild only picked up the new source files via `COPY . .`; `data/raw/wearable/` (gitignored, not
+in the image) is supplied at runtime by the same `./data:/app/data` volume mount that already
+carries `data/raw/emr/`:
+```
+33 passed, 1 warning in 175.14s (0:02:55)
+```
+All 33 tests, across all three test files, pass in both environments.
 
 ## Known Issues / Blockers
 
@@ -157,9 +167,6 @@ subjects) -- PASSED. Not yet re-verified inside Docker (see Known Issues).
 - Clinical state vectors and wearable profiles are computed but not yet persisted to the database
   (`src/db/`) -- both pipelines only produce them in-memory (`run_emr_pipeline()`,
   `run_wearable_pipeline()`).
-- The wearable pipeline's Docker image doesn't need any new dependencies (torch/numpy/scipy/
-  neurokit2 were already in requirements.txt from Phase 0), but `tests/test_wearable_pipeline.py`
-  hasn't been run inside a container yet -- only in the local venv.
 - The "ouch meter" activation score is trained against a heuristic proxy target (see Phase 2
   completed notes above), not real pain/symptom self-reports -- there aren't any in this dataset.
   Treat the score as illustrative of the architecture, not a validated pain measure.
@@ -171,7 +178,6 @@ subjects) -- PASSED. Not yet re-verified inside Docker (see Known Issues).
 
 - Phase 3: Genomics pipeline -- variant annotation, GWAS, GSEA pathway aggregation producing the
   genomic pathway profile
-- Verify Phase 2 tests pass inside Docker (same as Phase 1's Docker verification)
 - Persist EMR clinical state vectors and wearable profiles via `src/db/` (and/or chromadb) so later
   phases can read them back rather than recomputing
 - Phase 4: Digital Twin Abstraction Layer combining the three embeddings per patient
