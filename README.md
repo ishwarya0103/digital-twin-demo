@@ -30,6 +30,8 @@ data/raw/emr_notes/      Matching Synthea C-CDA XML per patient (output/ccda/, s
                          run as emr/ so patient UUIDs line up), optional
 data/raw/emr_metadata/   Synthea's hospitalInformation*/practitionerInformation*.json --
                          not patient records, kept out of the pipeline's input directory
+data/raw/wearable/       Wearable Exam Stress Dataset (Empatica E4 exports), not committed
+                         (~165MB) -- see Wearable data below
 data/processed/          Processed data and the local SQLite database (not committed)
 docker/                 Dockerfile
 tests/                  pytest suite
@@ -52,6 +54,15 @@ docker compose up --build
 
 The app is served on `http://localhost:8000`. `./data` is mounted into the container so the SQLite
 database at `data/processed/twin.db` persists across restarts.
+
+## Wearable data
+
+`src/wearable_pipeline/` expects the public Wearable Exam Stress Dataset (Empatica E4 wristband
+exports -- ACC/BVP/EDA/HR/IBI/TEMP/tags CSVs, published on PhysioNet) at
+`data/raw/wearable/<subject>/<session>/`, one subfolder per subject (e.g. `S1`-`S5`) and per exam
+session (`Final`, `Midterm 1`, `Midterm 2`), filenames unchanged from the distribution. It isn't
+committed here (~165MB of raw sensor CSVs) -- download it from PhysioNet and place it at that path
+to reproduce the demo.
 
 ## Database
 

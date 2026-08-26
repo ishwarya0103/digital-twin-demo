@@ -25,3 +25,8 @@ chroma_db/
 /synthea/
 /synthea_sample/
 /synthea_sample.zip
+
+# Wearable Exam Stress Dataset raw CSVs (~165MB) -- kept out of git to avoid repo bloat.
+# See README.md for how to re-populate data/raw/wearable/.
+/data/raw/wearable/*
+!/data/raw/wearable/.gitkeep
