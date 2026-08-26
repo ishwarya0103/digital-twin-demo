@@ -75,12 +75,16 @@ Local venv (`.venv`, Python 3.12):
 ```
 
 Docker (`docker compose build` then `docker compose run --rm app pytest -v`, 2026-08-25), image now
-includes the `en_core_web_lg` spaCy download Presidio needs:
+includes the `en_core_web_lg` spaCy download and a Bio_ClinicalBERT pre-fetch, both baked in at
+build time so neither re-downloads on container run:
 ```
-17 passed, 1 warning in 299.81s (0:04:59)
+17 passed, 1 warning in 244.18s (0:04:04)
 ```
-The Docker run is slower mainly because Bio_ClinicalBERT (~400MB) downloads from Hugging Face on
-first use inside the container rather than being pre-baked into the image (see Known Issues).
+Only modestly faster than the pre-caching run (299.81s) -- the ~400MB Hugging Face download
+accounted for some of the difference, but most of the runtime is genuinely CPU-bound
+Bio_ClinicalBERT inference across the ~1,000+ note-derived events per patient (see Known Issues),
+not network time. The caching change still did its job: containers no longer depend on network
+access to Hugging Face at all once built.
 
 `tests/test_app_startup.py::test_app_starts_and_connects_to_db` -- PASSED
 `tests/test_emr_pipeline.py` (16 tests: 1 patient-count check + 3 per-patient checks x 5 patients)
@@ -89,9 +93,11 @@ first use inside the container rather than being pre-baked into the image (see K
 ## Known Issues / Blockers
 
 - Docker Desktop must be running before `docker compose build`/`run` -- confirm before invoking.
-- Bio_ClinicalBERT is not pre-baked into the Docker image (only the spaCy model is), so each fresh
-  container/`docker compose run` re-downloads it (~400MB) unless a Hugging Face cache volume is
-  added later -- fine for occasional test runs, worth fixing if this becomes a hot path.
+- Most of the ~4 minute Docker test runtime is CPU-bound Bio_ClinicalBERT inference (one forward
+  pass per matched medication/diagnosis/symptom mention -- ~1,000+ per patient for the richer
+  synthetic histories), not model loading or download. If this becomes a hot path, the cheaper fix
+  is cutting down redundant note-derived matches (e.g. dropping the C-CDA merge, see below) rather
+  than infrastructure changes.
 - Synthea's default FHIR export has no free-text notes at all; even its C-CDA export is mostly
   structured tables restating coded data, not dictated prose -- except the `DocumentReference`
   resources in this regenerated FHIR set, which do contain genuine synthetic clinical notes
