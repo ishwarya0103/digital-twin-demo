@@ -20,3 +20,8 @@ build/
 .vscode/
 chroma_db/
 .claude/
+
+# Synthea generation tooling (not part of the pipeline -- data/raw/emr* holds its output)
+/synthea/
+/synthea_sample/
+/synthea_sample.zip

@@ -23,9 +23,11 @@ not perform real-time clinical decision-making.
 - chromadb -- included in `requirements.txt` for later use as the embedding/vector store, not yet
   wired up
 - pytest -- test suite (`tests/`)
-- Presidio, transformers, torch, numpy, scipy, neurokit2, gseapy, anthropic -- pipeline-specific
-  dependencies for later phases (EMR NLP, wearable signal processing, genomics pathway analysis,
-  generative fusion)
+- Presidio (+ spaCy `en_core_web_lg`) -- de-identification, used in `src/emr_pipeline/`
+- transformers/torch (Bio_ClinicalBERT, no fine-tuning) -- clinical NLP extraction and embedding
+  generation in `src/emr_pipeline/`
+- numpy, scipy, neurokit2, gseapy, anthropic -- pipeline-specific dependencies for later phases
+  (wearable signal processing, genomics pathway analysis, generative fusion)
 
 ## Current status
 

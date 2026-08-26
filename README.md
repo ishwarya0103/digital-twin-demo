@@ -24,8 +24,13 @@ src/governance/         De-identification, audit logging, institutional boundari
 src/db/                 SQLAlchemy engine/session, swappable via DATABASE_URL
 api/                    FastAPI app
 app/                    Streamlit UI
-data/raw/               Raw input data (not committed)
-data/processed/         Processed data and the local SQLite database (not committed)
+data/raw/emr/            Synthea FHIR R4 Bundle JSON, one file per patient (filenames as
+                         downloaded from Synthea's output/fhir/, unchanged)
+data/raw/emr_notes/      Matching Synthea C-CDA XML per patient (output/ccda/, same generation
+                         run as emr/ so patient UUIDs line up), optional
+data/raw/emr_metadata/   Synthea's hospitalInformation*/practitionerInformation*.json --
+                         not patient records, kept out of the pipeline's input directory
+data/processed/          Processed data and the local SQLite database (not committed)
 docker/                 Dockerfile
 tests/                  pytest suite
 ```
@@ -34,7 +39,9 @@ tests/                  pytest suite
 
 ```bash
 cp .env.example .env
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+python -m spacy download en_core_web_lg  # NLP engine Presidio uses for de-identification
 ```
 
 ## Running with Docker
