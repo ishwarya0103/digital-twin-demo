@@ -67,11 +67,20 @@ Complete
 
 ## Test Status
 
-Local venv (`.venv`, Python 3.12), not Docker -- see Known Issues:
+Verified in both environments:
 
+Local venv (`.venv`, Python 3.12):
 ```
 17 passed, 1 warning in 81.15s (0:01:21)
 ```
+
+Docker (`docker compose build` then `docker compose run --rm app pytest -v`, 2026-08-25), image now
+includes the `en_core_web_lg` spaCy download Presidio needs:
+```
+17 passed, 1 warning in 299.81s (0:04:59)
+```
+The Docker run is slower mainly because Bio_ClinicalBERT (~400MB) downloads from Hugging Face on
+first use inside the container rather than being pre-baked into the image (see Known Issues).
 
 `tests/test_app_startup.py::test_app_starts_and_connects_to_db` -- PASSED
 `tests/test_emr_pipeline.py` (16 tests: 1 patient-count check + 3 per-patient checks x 5 patients)
@@ -80,11 +89,9 @@ Local venv (`.venv`, Python 3.12), not Docker -- see Known Issues:
 ## Known Issues / Blockers
 
 - Docker Desktop must be running before `docker compose build`/`run` -- confirm before invoking.
-- Phase 1 tests ran via a local venv, not Docker. `docker/Dockerfile` now includes the
-  `en_core_web_lg` spaCy download Presidio needs, but the image hasn't been rebuilt since -- do
-  that (`docker compose build`) before running `tests/test_emr_pipeline.py` in a container; expect
-  a slower first run since Bio_ClinicalBERT (~400MB) downloads from Hugging Face on first use
-  inside the container rather than being pre-baked into the image.
+- Bio_ClinicalBERT is not pre-baked into the Docker image (only the spaCy model is), so each fresh
+  container/`docker compose run` re-downloads it (~400MB) unless a Hugging Face cache volume is
+  added later -- fine for occasional test runs, worth fixing if this becomes a hot path.
 - Synthea's default FHIR export has no free-text notes at all; even its C-CDA export is mostly
   structured tables restating coded data, not dictated prose -- except the `DocumentReference`
   resources in this regenerated FHIR set, which do contain genuine synthetic clinical notes
