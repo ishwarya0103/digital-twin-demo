@@ -6,17 +6,19 @@ Cohort-level: run once against the shared input VCF, not per patient.
 import subprocess
 from pathlib import Path
 
-from src.genomics_pipeline.config import SNPEFF_GENOME_BUILD, resolve_snpeff
+from src.genomics_pipeline.config import SNPEFF_DATA_DIR, SNPEFF_GENOME_BUILD, resolve_snpeff
 from src.genomics_pipeline.models import VariantAnnotation
 
 
 def run_snpeff(vcf_path: Path, out_path: Path, genome_build: str = SNPEFF_GENOME_BUILD) -> Path:
     snpeff_bin = resolve_snpeff()
+    data_dir = str(Path(SNPEFF_DATA_DIR).resolve())
     with open(out_path, "w") as out_f:
         result = subprocess.run(
             # -Xmx4g: the whole-genome GRCh37.75 database doesn't fit in SnpEff's 1GB default
             # JVM heap (loading it OOMs otherwise), even though the VCF itself is tiny.
-            [snpeff_bin, "-Xmx4g", "-noStats", "-noLog", genome_build, str(vcf_path)],
+            # -dataDir: see config.py's SNPEFF_DATA_DIR docstring.
+            [snpeff_bin, "-Xmx4g", "-noStats", "-noLog", "-dataDir", data_dir, genome_build, str(vcf_path)],
             stdout=out_f,
             stderr=subprocess.PIPE,
             text=True,

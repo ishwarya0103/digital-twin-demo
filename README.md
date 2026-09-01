@@ -32,6 +32,10 @@ data/raw/emr_metadata/   Synthea's hospitalInformation*/practitionerInformation*
                          not patient records, kept out of the pipeline's input directory
 data/raw/wearable/       Wearable Exam Stress Dataset (Empatica E4 exports), not committed
                          (~165MB) -- see Wearable data below
+data/raw/genomics/       Small hand-crafted VCF (5 samples, chr21), see Genomics data below
+data/raw/genomics_snpeff_db/
+                         SnpEff's GRCh37.75 annotation database, trimmed to chr21, not committed
+                         (~106MB) -- see Genomics data below
 data/processed/          Processed data and the local SQLite database (not committed)
 docker/                 Dockerfile
 tests/                  pytest suite
@@ -63,6 +67,34 @@ exports -- ACC/BVP/EDA/HR/IBI/TEMP/tags CSVs, published on PhysioNet) at
 session (`Final`, `Midterm 1`, `Midterm 2`), filenames unchanged from the distribution. It isn't
 committed here (~165MB of raw sensor CSVs) -- download it from PhysioNet and place it at that path
 to reproduce the demo.
+
+## Genomics data
+
+`src/genomics_pipeline/` expects a single VCF (`.vcf` or `.vcf.gz`) at `data/raw/genomics/`,
+subset to the same 5 sample IDs used elsewhere and (for a tractable demo) a single chromosome.
+`data/raw/genomics/5patients_test.vcf.gz` is committed here: a small, hand-crafted, valid VCF (10
+variants on chr21) rather than a real 1000 Genomes download -- the public 1000 Genomes FTP mirrors
+were unreachable when this phase was built. See PROGRESS.md's Phase 3 notes for what that means for
+pipeline output (pathway enrichment scores come out neutral).
+
+The pipeline also needs SnpEff's GRCh37.75 annotation database at
+`data/raw/genomics_snpeff_db/GRCh37.75/`. It isn't committed (~106MB) and SnpEff's own downloader
+(`snpEff download GRCh37.75`) pulls from `snpeff.blob.core.windows.net`, which was also unreachable
+in this project's dev/build environment -- so it isn't fetched automatically at Docker build time
+either (see `docker/Dockerfile`'s comment on this). To reproduce:
+
+- If you have network access to that host, run `snpEff download GRCh37.75` with any local SnpEff
+  install and point `SNPEFF_DATA_DIR` (see `src/genomics_pipeline/config.py`) at the resulting
+  `data/GRCh37.75/` directory, or copy it into `data/raw/genomics_snpeff_db/GRCh37.75/`.
+- Otherwise, obtain `GRCh37.75/snpEffectPredictor.bin` (required) plus `cytoBand.txt.gz` and
+  `pwms.bin` (used for effect prediction) and `sequence.<chrom>.bin` for whichever chromosome(s)
+  your VCF covers (`sequence.21.bin` for the committed demo VCF) from any existing SnpEff 5.x
+  GRCh37.75 install, and place them under `data/raw/genomics_snpeff_db/GRCh37.75/`.
+
+PLINK (`plink1.9`) and SnpEff are resolved via `PATH`, then `PLINK_BIN`/`SNPEFF_BIN` env var
+overrides, then a local conda env fallback (see `config.py`) -- installed via
+`docker/Dockerfile`'s `apt-get install plink1.9 snpeff default-jre-headless` for the Docker image,
+or install both locally (e.g. via a `genomics` conda env) for the local venv.
 
 ## Database
 

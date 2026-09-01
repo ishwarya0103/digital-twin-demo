@@ -193,22 +193,36 @@ Local venv, full suite including the new genomics tests (2026-09-01):
 `tests/test_genomics_pipeline.py` (14 tests) -- PASSED. PLINK and SnpEff resolved via the local
 conda env fallback in `config.py` (`~/miniforge/.../envs/genomics/bin`), not PATH.
 
-Not yet verified in Docker -- `docker/Dockerfile` does not install PLINK or SnpEff (no
-`apt-get`/`conda` step for either), so `run_genomics_pipeline()` will fail to resolve either binary
-in a container as the Dockerfile currently stands. See Known Issues.
+Docker (`docker compose build` then `docker compose run --rm app pytest -v`, 2026-09-01). Added
+`plink1.9`, `snpeff`, and `default-jre-headless` to `docker/Dockerfile` via `apt-get` (the Debian
+`snpeff` package installs the binary as `/usr/bin/snpEff`; `plink1.9` installs as
+`/usr/bin/plink1.9`, not `plink` -- `PLINK_BIN`/`SNPEFF_BIN` env vars set in the Dockerfile point
+`config.py`'s binary resolution at both explicitly). The SnpEff GRCh37.75 genome database is not
+fetched during the Docker build (its usual source, `snpeff.blob.core.windows.net`, was unreachable
+from this project's build environment -- same public-mirror situation as the VCF itself); instead
+`data/raw/genomics_snpeff_db/GRCh37.75/` (trimmed to chr21-only, ~106MB, gitignored -- see Genomics
+data in README.md) is supplied at runtime through the existing `./data:/app/data` volume mount, the
+same way `data/raw/wearable/` already works, and `annotation.py` passes it to SnpEff explicitly via
+`-dataDir` (added `SNPEFF_DATA_DIR` in `config.py`) rather than relying on SnpEff's own default data
+directory, which differs between the local conda install and the Docker image:
+```
+47 passed in 274.18s (0:04:34)
+```
+`tests/test_genomics_pipeline.py` (14 tests) -- PASSED in Docker, matching local venv results.
+All 47 tests, across all four test files, now pass in both environments.
 
 ## Known Issues / Blockers
 
-- `docker/Dockerfile` does not yet install PLINK or SnpEff -- the genomics pipeline only runs
-  outside Docker right now (local conda env with both on `PATH`/resolvable via `config.py`'s
-  fallback dirs). Needs an `apt-get`/conda install step added before Docker verification can happen,
-  same pattern as the `en_core_web_lg`/Bio_ClinicalBERT pre-fetch already baked in for Phase 1.
 - `data/raw/genomics/5patients_test.vcf.gz` is a hand-crafted synthetic VCF, not real 1000 Genomes
   data -- the public FTP mirrors were unreachable when this phase was built (see Phase 3 completed
   notes above). Its 10 variants don't fall in genes covered by `pain_pathways.gmt`'s curated gene
   sets, so pathway enrichment scores are neutral (p=1.0) for every sample; this is expected given the
   placeholder data, not a pipeline bug -- swap in real 1000 Genomes data later to get non-trivial
   enrichment results.
+- `data/raw/genomics_snpeff_db/GRCh37.75/` (SnpEff's annotation database) is trimmed to chr21 only,
+  matching the demo VCF -- annotating a VCF with variants on any other chromosome will fail against
+  this local copy until the corresponding `sequence.<chrom>.bin` is added. See README.md's Genomics
+  data section.
 
 - Docker Desktop must be running before `docker compose build`/`run` -- confirm before invoking.
 - Most of the ~4 minute Docker test runtime is CPU-bound Bio_ClinicalBERT inference (one forward
@@ -237,10 +251,10 @@ in a container as the Dockerfile currently stands. See Known Issues.
 
 ## Next Steps
 
-- Add PLINK/SnpEff install steps to `docker/Dockerfile` and verify the genomics test suite in Docker
-  (see Known Issues)
 - Swap the hand-crafted `data/raw/genomics/5patients_test.vcf.gz` for a real 1000 Genomes subset
-  once a working source is found, so pathway enrichment produces non-trivial scores
+  once a working source is found, so pathway enrichment produces non-trivial scores -- if the
+  replacement covers more than chr21, `data/raw/genomics_snpeff_db/GRCh37.75/` needs the matching
+  additional `sequence.<chrom>.bin` file(s) too
 - Persist EMR clinical state vectors, wearable profiles, and genomic pathway profiles via `src/db/`
   (and/or chromadb) so later phases can read them back rather than recomputing
 - Phase 4: Digital Twin Abstraction Layer combining the three embeddings per patient

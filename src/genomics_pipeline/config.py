@@ -19,6 +19,15 @@ PIPELINE_VERSION = "genomics-v0.1.0"
 # -> gene/functional-consequence annotation).
 SNPEFF_GENOME_BUILD = "GRCh37.75"  # 1000 Genomes VCFs are near-universally GRCh37-based
 
+# SnpEff's own genome-database download (`snpEff download`) pulls from
+# snpeff.blob.core.windows.net, which is unreachable in this project's build/dev environment (same
+# public-mirror-unreachable situation as the VCF itself -- see PROGRESS.md). data/raw/genomics_snpeff_db/
+# holds a local copy of the GRCh37.75 database, trimmed to chr21 only since this project's VCF never
+# covers more than one chromosome (see vcf_loader.py); passed to SnpEff via -dataDir so it doesn't
+# depend on SnpEff's own (potentially absent or differently-configured) default data directory.
+# SNPEFF_DATA_DIR env var overrides this for a machine that already has a full local install.
+SNPEFF_DATA_DIR = os.environ.get("SNPEFF_DATA_DIR", "data/raw/genomics_snpeff_db")
+
 NUM_PRINCIPAL_COMPONENTS = 2  # only 5 samples -- PLINK caps meaningful PCs at n_samples - 1
 
 PATHWAY_GMT_PATH = Path(__file__).resolve().parent / "pain_pathways.gmt"

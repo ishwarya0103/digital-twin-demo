@@ -34,3 +34,9 @@ chroma_db/
 # PLINK/SnpEff intermediate output from running the genomics pipeline (bed/bim/fam, .assoc,
 # .eigenvec, annotated.vcf, etc.) -- regenerated on every run, not pipeline input or source.
 /data/processed/genomics/
+
+# SnpEff's GRCh37.75 annotation database, trimmed to chr21 (this project's VCF only covers chr21)
+# -- ~106MB, too large to commit. See README.md's "Genomics data" section for how to re-populate
+# data/raw/genomics_snpeff_db/.
+/data/raw/genomics_snpeff_db/*
+!/data/raw/genomics_snpeff_db/.gitkeep
