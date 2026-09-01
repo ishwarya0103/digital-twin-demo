@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 3 -- Genomics pipeline
+Phase 4 -- Digital Twin Abstraction Layer
 
 ## Status
 
@@ -144,6 +144,38 @@ across the EMR/wearable phases' patient identifier convention
       annotation, gseapy enrichment) end-to-end without making any claim about real genetic
       association or ancestry for these sample IDs
 
+**Phase 4 -- Digital Twin Abstraction Layer** (architecture doc Section 4, "Layer 2"), combining
+each patient's three Layer 1 embeddings into one versioned, traceable record -- concatenation and
+storage only, no reasoning/prediction/transformation, per the doc's explicit scope boundary for
+this layer
+- [x] `src/digital_twin/models.py` -- `DigitalTwin` SQLAlchemy model, one row per patient per
+      version (`UniqueConstraint("patient_id", "version")`). Each domain gets its own embedding
+      column *and* its own `..._pipeline_version` column (`emr_embedding`/`emr_pipeline_version`,
+      `genomic_embedding`/`genomic_pipeline_version`, `wearable_embedding`/
+      `wearable_pipeline_version`) so every twin component stays traceable to its source domain
+      and the pipeline version that produced it, per the doc's Layer 2 design-choice table.
+      Embeddings stored as JSON (`list[float]`) rather than raw binary -- portable across SQLite
+      and the Postgres migration path with no code changes, matching `src/db/`'s existing
+      `DATABASE_URL`-only-swap convention
+- [x] `src/digital_twin/assembly.py` -- `assemble_and_store_twin()` takes a patient's three
+      already-computed embeddings (plus each one's pipeline_version) and writes a new row with
+      `version` = that patient's current highest version + 1 (1 for a first twin). Never updates
+      or deletes a prior row -- every previously assembled twin for a patient stays queryable
+      exactly as it was. Deliberately takes the three embeddings as direct arguments rather than
+      invoking the EMR/wearable/genomics pipelines itself, keeping this layer decoupled from how
+      each Layer 1 pipeline is actually invoked (batch cohort run vs. per-patient), matching the
+      doc's "batch/retrospective" update-frequency design choice
+- [x] `src/digital_twin/retrieval.py` -- `get_twin()` (full record, latest version by default or
+      a specific `version`) and `get_twin_domain()` (one domain's embedding + pipeline_version
+      only, `domain` in `{"emr", "genomic", "wearable"}`, raises on an unrecognized domain)
+- [x] `tests/test_digital_twin.py` -- against an isolated in-memory SQLite DB (not the project's
+      real `data/processed/twin.db`): a stored twin contains all three embeddings correctly
+      labeled by source and pipeline_version; assembling a second version for the same patient
+      leaves the first version's row unchanged and queryable (both rows coexist, latest-version
+      lookup returns the newer one); domain-filtered retrieval returns only the requested
+      domain's embedding/pipeline_version, no keys from the other two domains; unknown-domain and
+      unknown-patient edge cases
+
 ## Test Status
 
 Verified in both environments:
@@ -211,7 +243,28 @@ directory, which differs between the local conda install and the Docker image:
 `tests/test_genomics_pipeline.py` (14 tests) -- PASSED in Docker, matching local venv results.
 All 47 tests, across all four test files, now pass in both environments.
 
+Local venv, full suite including the new digital twin tests (2026-09-01):
+```
+52 passed, 1 warning in 104.05s (0:01:44)
+```
+`tests/test_digital_twin.py` (5 tests) -- PASSED. Runs against an isolated in-memory SQLite
+database created per test, not the project's real `data/processed/twin.db`.
+
+Docker (`docker compose build` then `docker compose run --rm app pytest -q`, 2026-09-01). No new
+system dependencies needed for this phase (`src/digital_twin/` only uses SQLAlchemy, already in
+the image) -- rebuild only picked up the new source files via `COPY . .`:
+```
+52 passed in 240.41s (0:04:00)
+```
+All 52 tests, across all five test files, pass in both environments.
+
 ## Known Issues / Blockers
+
+- `assemble_and_store_twin()` takes each domain's embedding directly rather than pulling it from
+  `run_emr_pipeline`/`run_wearable_pipeline`/`run_genomics_pipeline` itself -- there's no
+  orchestration function yet that runs all three Layer 1 pipelines for one patient and calls
+  `assemble_and_store_twin()` with their outputs. `api`/`app` (or a future phase) will need that
+  glue when the digital twin actually gets populated from real pipeline runs rather than tests.
 
 - `data/raw/genomics/5patients_test.vcf.gz` is a hand-crafted synthetic VCF, not real 1000 Genomes
   data -- the public FTP mirrors were unreachable when this phase was built (see Phase 3 completed
@@ -236,12 +289,13 @@ All 47 tests, across all four test files, now pass in both environments.
   (Chief Complaint / HPI / Assessment and Plan). The C-CDA merge is still wired in and adds some
   value/diversity but is largely redundant with those; could be dropped later to cut pipeline
   runtime if it matters.
-- No pipeline logic yet for `src/digital_twin/`, `src/fusion_layer/`, `src/governance/` (still
-  empty packages).
+- No pipeline logic yet for `src/fusion_layer/`, `src/governance/` (still empty packages).
 - `chromadb` is installed but not yet wired into any code path.
-- Clinical state vectors and wearable profiles are computed but not yet persisted to the database
-  (`src/db/`) -- both pipelines only produce them in-memory (`run_emr_pipeline()`,
-  `run_wearable_pipeline()`).
+- The three Layer 1 pipelines (`run_emr_pipeline()`, `run_wearable_pipeline()`,
+  `run_genomics_pipeline()`) still only produce their embeddings in-memory -- `src/digital_twin/`
+  can now store and version them once assembled, but nothing yet calls all three pipelines for one
+  patient and feeds their outputs into `assemble_and_store_twin()` (see Phase 4 completed notes
+  above and Next Steps).
 - The "ouch meter" activation score is trained against a heuristic proxy target (see Phase 2
   completed notes above), not real pain/symptom self-reports -- there aren't any in this dataset.
   Treat the score as illustrative of the architecture, not a validated pain measure.
@@ -255,7 +309,7 @@ All 47 tests, across all four test files, now pass in both environments.
   once a working source is found, so pathway enrichment produces non-trivial scores -- if the
   replacement covers more than chr21, `data/raw/genomics_snpeff_db/GRCh37.75/` needs the matching
   additional `sequence.<chrom>.bin` file(s) too
-- Persist EMR clinical state vectors, wearable profiles, and genomic pathway profiles via `src/db/`
-  (and/or chromadb) so later phases can read them back rather than recomputing
-- Phase 4: Digital Twin Abstraction Layer combining the three embeddings per patient
+- Orchestration glue that runs all three Layer 1 pipelines for a given patient_id and calls
+  `assemble_and_store_twin()` with their outputs -- `src/digital_twin/` can store and version
+  twins, but nothing yet wires real pipeline runs into it end-to-end (see Known Issues)
 - Phase 5: Generative Semantic Fusion Layer (Anthropic API, structured/schema-constrained output)
