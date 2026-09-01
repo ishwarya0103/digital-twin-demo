@@ -105,8 +105,10 @@ Wearable Exam Stress Dataset (Empatica E4 exports, 3 sessions each: Final/Midter
       big enough jump from Phase 1's ~16MB that it warranted asking rather than assuming the same
       precedent applied. See README.md's "Wearable data" section for how to re-populate it
 
-**Phase 3 -- Genomics pipeline** (architecture doc Section 3.3), for the same 5 sample IDs used
-across the EMR/wearable phases' patient identifier convention
+**Phase 3 -- Genomics pipeline** (architecture doc Section 3.3), for 5 VCF sample columns
+(`HG00096`/`HG00097`/`HG00099`/`HG00100`/`HG00101`). **Correction (Phase 4):** these are *not*
+the same patient identities as the 5 EMR patients or 5 wearable subjects -- see Phase 4's
+completed notes below for why and how orchestration handles it.
 - [x] `src/genomics_pipeline/vcf_loader.py` -- reads sample IDs and a per-variant, per-sample
       genotype dosage table from a single VCF discovered by extension (`*.vcf`/`*.vcf.gz`) under
       `data/raw/genomics/`; resolves the discovered path to absolute so it survives the
@@ -175,6 +177,35 @@ this layer
       lookup returns the newer one); domain-filtered retrieval returns only the requested
       domain's embedding/pipeline_version, no keys from the other two domains; unknown-domain and
       unknown-patient edge cases
+- [x] `src/digital_twin/orchestrate.py` -- runs the three Layer 1 pipelines for one patient and
+      calls `assemble_and_store_twin()` with their outputs. Surfaced a real data problem while
+      building this: the EMR (Synthea), wearable (Exam Stress Dataset), and genomics (this
+      demo's VCF) source datasets are three independent public datasets with **disjoint patient
+      ID spaces** -- a Synthea `Patient.id` UUID, a wearable subject folder name ("S1".."S5"),
+      and a VCF sample column ("HG00096" etc.) never refer to the same real person, so there is
+      no natural shared `patient_id` across domains (see the corrected Phase 3 note above, which
+      previously claimed otherwise). Asked the user how to handle this; the decision was to *not*
+      pretend a unified ID exists: `orchestrate_twin_for_patient()` takes each domain's source ID
+      explicitly (`emr_patient_id`, `wearable_subject_id`, `genomic_sample_id`) plus the
+      `patient_id` to store the resulting twin under, so the correspondence is always an explicit
+      choice made by the caller, never inferred by this module
+- [x] `orchestrate_twins_for_cohort()` -- assembles twins for a list of explicit ID-mapping dicts,
+      running the wearable and genomics pipelines exactly once and reusing their output for every
+      mapping, rather than once per patient -- both are inherently cohort-level (one LSTM trained
+      across all wearable subjects; GWAS/PCA/pathway enrichment computed across the whole VCF), so
+      re-running them per patient would redundantly retrain/recompute the same cohort-wide result
+- [x] `tests/test_digital_twin_orchestrate.py` -- end-to-end (no mocking, same convention as the
+      other pipeline test files): runs the real EMR/wearable/genomics pipelines for one explicit
+      ID triple and confirms the stored twin has all three embeddings at their expected
+      dimensions, labeled with the correct pipeline_version, and round-trips correctly through
+      `get_twin()`
+- [x] Ran `orchestrate_twins_for_cohort()` for all 5 patients against the project's real
+      `data/processed/twin.db`, with an explicit positional pairing across the three ID spaces
+      declared at the call site (patient-1..5 <-> first..fifth EMR bundle <-> S1..S5 <->
+      HG00096/97/99/100/101) -- an arbitrary demo convention, not a real identity claim. All 5
+      twins stored at version 1 with correctly-dimensioned embeddings from all three domains
+      (EMR 768, genomic 15, wearable 16) and correct per-domain pipeline_versions; verified via
+      both `get_twin()` and `get_twin_domain()` for every patient and domain
 
 ## Test Status
 
@@ -258,14 +289,42 @@ the image) -- rebuild only picked up the new source files via `COPY . .`:
 ```
 All 52 tests, across all five test files, pass in both environments.
 
+Local venv, full suite including the new orchestration test (2026-09-01):
+```
+53 passed, 1 warning in 143.21s (0:02:23)
+```
+`tests/test_digital_twin_orchestrate.py` (1 test) -- PASSED. Runs the real EMR/wearable/genomics
+pipelines end-to-end for one explicit patient/subject/sample ID triple (no mocking), against an
+isolated in-memory SQLite DB.
+
+Docker (`docker compose build` then `docker compose run --rm app pytest -q`, 2026-09-01). No new
+system dependencies needed for this phase:
+```
+53 passed in 374.98s (0:06:14)
+```
+All 53 tests, across all six test files, pass in both environments. The Docker run is noticeably
+slower than local venv (375s vs. 143s) here specifically because `test_digital_twin_orchestrate.py`
+now runs the full wearable cohort pipeline (150-epoch LSTM training, CPU-only in the container) in
+addition to the already-CPU-bound EMR Bio_ClinicalBERT inference -- both now happen in the same
+test run rather than across separate test files.
+
+Also ran `orchestrate_twins_for_cohort()` outside pytest, for all 5 patients against the project's
+real `data/processed/twin.db` -- see Phase 4 completed notes above for the result.
+
 ## Known Issues / Blockers
 
-- `assemble_and_store_twin()` takes each domain's embedding directly rather than pulling it from
-  `run_emr_pipeline`/`run_wearable_pipeline`/`run_genomics_pipeline` itself -- there's no
-  orchestration function yet that runs all three Layer 1 pipelines for one patient and calls
-  `assemble_and_store_twin()` with their outputs. `api`/`app` (or a future phase) will need that
-  glue when the digital twin actually gets populated from real pipeline runs rather than tests.
-
+- The EMR, wearable, and genomics source datasets have **disjoint patient ID spaces** (Synthea
+  `Patient.id` UUIDs / wearable "S1".."S5" / VCF sample columns "HG00096" etc.) -- there is no real
+  correspondence between "patient 1" in one domain and "patient 1" in another. Every twin assembled
+  so far (in tests and in the real `data/processed/twin.db`) uses an arbitrary positional pairing
+  chosen at the call site (see Phase 4 completed notes above), not a genuine identity link. Treat
+  `data/processed/twin.db`'s current 5 rows as a mechanics demonstration, not 5 real patients'
+  actual combined state.
+- `orchestrate_twin_for_patient()` re-runs the *entire* wearable and genomics cohort pipelines
+  (LSTM training across all subjects; PLINK/SnpEff/gseapy across the whole VCF) on every call
+  unless `wearable_profiles`/`genomic_profiles` are passed in from a previous run -- calling it in
+  a loop for multiple patients without doing that is wasteful. `orchestrate_twins_for_cohort()`
+  avoids this by construction; prefer it whenever assembling more than one patient's twin.
 - `data/raw/genomics/5patients_test.vcf.gz` is a hand-crafted synthetic VCF, not real 1000 Genomes
   data -- the public FTP mirrors were unreachable when this phase was built (see Phase 3 completed
   notes above). Its 10 variants don't fall in genes covered by `pain_pathways.gmt`'s curated gene
@@ -291,11 +350,6 @@ All 52 tests, across all five test files, pass in both environments.
   runtime if it matters.
 - No pipeline logic yet for `src/fusion_layer/`, `src/governance/` (still empty packages).
 - `chromadb` is installed but not yet wired into any code path.
-- The three Layer 1 pipelines (`run_emr_pipeline()`, `run_wearable_pipeline()`,
-  `run_genomics_pipeline()`) still only produce their embeddings in-memory -- `src/digital_twin/`
-  can now store and version them once assembled, but nothing yet calls all three pipelines for one
-  patient and feeds their outputs into `assemble_and_store_twin()` (see Phase 4 completed notes
-  above and Next Steps).
 - The "ouch meter" activation score is trained against a heuristic proxy target (see Phase 2
   completed notes above), not real pain/symptom self-reports -- there aren't any in this dataset.
   Treat the score as illustrative of the architecture, not a validated pain measure.
@@ -309,7 +363,7 @@ All 52 tests, across all five test files, pass in both environments.
   once a working source is found, so pathway enrichment produces non-trivial scores -- if the
   replacement covers more than chr21, `data/raw/genomics_snpeff_db/GRCh37.75/` needs the matching
   additional `sequence.<chrom>.bin` file(s) too
-- Orchestration glue that runs all three Layer 1 pipelines for a given patient_id and calls
-  `assemble_and_store_twin()` with their outputs -- `src/digital_twin/` can store and version
-  twins, but nothing yet wires real pipeline runs into it end-to-end (see Known Issues)
+- A real cross-domain patient identity mapping, if/when one becomes available -- the current
+  positional pairing (see Known Issues) is a demo convenience, not something to build Phase 5
+  reasoning claims on top of as if it were real linked patient data
 - Phase 5: Generative Semantic Fusion Layer (Anthropic API, structured/schema-constrained output)
