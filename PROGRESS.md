@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 2 -- Wearable pipeline
+Phase 3 -- Genomics pipeline
 
 ## Status
 
@@ -105,6 +105,45 @@ Wearable Exam Stress Dataset (Empatica E4 exports, 3 sessions each: Final/Midter
       big enough jump from Phase 1's ~16MB that it warranted asking rather than assuming the same
       precedent applied. See README.md's "Wearable data" section for how to re-populate it
 
+**Phase 3 -- Genomics pipeline** (architecture doc Section 3.3), for the same 5 sample IDs used
+across the EMR/wearable phases' patient identifier convention
+- [x] `src/genomics_pipeline/vcf_loader.py` -- reads sample IDs and a per-variant, per-sample
+      genotype dosage table from a single VCF discovered by extension (`*.vcf`/`*.vcf.gz`) under
+      `data/raw/genomics/`; resolves the discovered path to absolute so it survives the
+      working-directory changes of the PLINK/SnpEff subprocess calls downstream
+- [x] `src/genomics_pipeline/config.py` -- resolves the PLINK and SnpEff binaries (PATH, then
+      `PLINK_BIN`/`SNPEFF_BIN` env var overrides, then a local conda env fallback); SnpEff stands in
+      for ANNOVAR (gated behind manual registration, no package-manager install path)
+- [x] `src/genomics_pipeline/annotation.py` -- Stage 1 (variant annotation). Shells out to SnpEff
+      (GRCh37.75) to label each variant with gene/functional consequence
+- [x] `src/genomics_pipeline/gwas.py` -- Stage 2 (GWAS) and Stage 3 (population stratification), both
+      via PLINK: `--assoc` against a synthetic alternating case/control phenotype (this cohort has no
+      real clinical trait to test against) and `--pca` for ancestry components. With 5 samples the
+      association test is statistically underpowered by construction -- illustrative of pipeline
+      mechanics, not evidence of real association
+- [x] `src/genomics_pipeline/pathway_aggregation.py` -- Stage 4 (pathway-level aggregation) via
+      gseapy's `gp.enrich()` (hypergeometric over-representation, not permutation-based ranked GSEA --
+      too few annotated genes here for that to be stable) against `pain_pathways.gmt`, a small
+      KEGG-derived gene-set collection (inflammation, nociception, drug metabolism) fetched once from
+      Enrichr's KEGG_2021_Human library. Handles gseapy returning `[]` instead of an empty DataFrame
+      when none of the hit genes overlap any pathway gene set at all (as opposed to overlapping some
+      pathways but not others) -- the case this project's tiny synthetic VCF actually hits
+- [x] `src/genomics_pipeline/embedding.py` -- Stage 5. Builds each patient's genomic pathway profile
+      vector (pathway enrichment scores + ancestry PCs)
+- [x] `src/genomics_pipeline/pipeline.py` -- orchestrates all five stages; resolves `work_dir` to an
+      absolute path up front so the PLINK output-file chain (bed/pheno/assoc/eigenvec paths, all
+      derived from `work_dir`) stays consistent across the subprocess calls that change `cwd`
+- [x] `tests/test_genomics_pipeline.py` -- PLINK runs and PCA covers all 5 samples, gseapy runs
+      without error, all 5 samples processed, pathway-score vector shape and traceability fields
+      correct per sample
+- [x] `data/raw/genomics/5patients_test.vcf.gz` -- a small hand-crafted, valid VCF (10 variants on
+      chr21, real VCF 4.2 format, BGZF-compressed, synthetic genotypes) for the same 5 sample IDs
+      used elsewhere in this phase. **Not real 1000 Genomes data.** The public 1000 Genomes FTP
+      mirrors were unreachable and a guessed GitHub test-file fallback also failed, so this
+      hand-crafted substitute exercises the pipeline mechanics (VCF parsing, PLINK GWAS/PCA, SnpEff
+      annotation, gseapy enrichment) end-to-end without making any claim about real genetic
+      association or ancestry for these sample IDs
+
 ## Test Status
 
 Verified in both environments:
@@ -147,7 +186,29 @@ carries `data/raw/emr/`:
 ```
 All 33 tests, across all three test files, pass in both environments.
 
+Local venv, full suite including the new genomics tests (2026-09-01):
+```
+47 passed, 1 warning in 106.91s (0:01:46)
+```
+`tests/test_genomics_pipeline.py` (14 tests) -- PASSED. PLINK and SnpEff resolved via the local
+conda env fallback in `config.py` (`~/miniforge/.../envs/genomics/bin`), not PATH.
+
+Not yet verified in Docker -- `docker/Dockerfile` does not install PLINK or SnpEff (no
+`apt-get`/`conda` step for either), so `run_genomics_pipeline()` will fail to resolve either binary
+in a container as the Dockerfile currently stands. See Known Issues.
+
 ## Known Issues / Blockers
+
+- `docker/Dockerfile` does not yet install PLINK or SnpEff -- the genomics pipeline only runs
+  outside Docker right now (local conda env with both on `PATH`/resolvable via `config.py`'s
+  fallback dirs). Needs an `apt-get`/conda install step added before Docker verification can happen,
+  same pattern as the `en_core_web_lg`/Bio_ClinicalBERT pre-fetch already baked in for Phase 1.
+- `data/raw/genomics/5patients_test.vcf.gz` is a hand-crafted synthetic VCF, not real 1000 Genomes
+  data -- the public FTP mirrors were unreachable when this phase was built (see Phase 3 completed
+  notes above). Its 10 variants don't fall in genes covered by `pain_pathways.gmt`'s curated gene
+  sets, so pathway enrichment scores are neutral (p=1.0) for every sample; this is expected given the
+  placeholder data, not a pipeline bug -- swap in real 1000 Genomes data later to get non-trivial
+  enrichment results.
 
 - Docker Desktop must be running before `docker compose build`/`run` -- confirm before invoking.
 - Most of the ~4 minute Docker test runtime is CPU-bound Bio_ClinicalBERT inference (one forward
@@ -161,8 +222,8 @@ All 33 tests, across all three test files, pass in both environments.
   (Chief Complaint / HPI / Assessment and Plan). The C-CDA merge is still wired in and adds some
   value/diversity but is largely redundant with those; could be dropped later to cut pipeline
   runtime if it matters.
-- No pipeline logic yet for `src/genomics_pipeline/`, `src/digital_twin/`, `src/fusion_layer/`,
-  `src/governance/` (still empty packages).
+- No pipeline logic yet for `src/digital_twin/`, `src/fusion_layer/`, `src/governance/` (still
+  empty packages).
 - `chromadb` is installed but not yet wired into any code path.
 - Clinical state vectors and wearable profiles are computed but not yet persisted to the database
   (`src/db/`) -- both pipelines only produce them in-memory (`run_emr_pipeline()`,
@@ -176,9 +237,11 @@ All 33 tests, across all three test files, pass in both environments.
 
 ## Next Steps
 
-- Phase 3: Genomics pipeline -- variant annotation, GWAS, GSEA pathway aggregation producing the
-  genomic pathway profile
-- Persist EMR clinical state vectors and wearable profiles via `src/db/` (and/or chromadb) so later
-  phases can read them back rather than recomputing
+- Add PLINK/SnpEff install steps to `docker/Dockerfile` and verify the genomics test suite in Docker
+  (see Known Issues)
+- Swap the hand-crafted `data/raw/genomics/5patients_test.vcf.gz` for a real 1000 Genomes subset
+  once a working source is found, so pathway enrichment produces non-trivial scores
+- Persist EMR clinical state vectors, wearable profiles, and genomic pathway profiles via `src/db/`
+  (and/or chromadb) so later phases can read them back rather than recomputing
 - Phase 4: Digital Twin Abstraction Layer combining the three embeddings per patient
 - Phase 5: Generative Semantic Fusion Layer (Anthropic API, structured/schema-constrained output)

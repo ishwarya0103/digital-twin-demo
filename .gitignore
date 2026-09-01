@@ -30,3 +30,7 @@ chroma_db/
 # See README.md for how to re-populate data/raw/wearable/.
 /data/raw/wearable/*
 !/data/raw/wearable/.gitkeep
+
+# PLINK/SnpEff intermediate output from running the genomics pipeline (bed/bim/fam, .assoc,
+# .eigenvec, annotated.vcf, etc.) -- regenerated on every run, not pipeline input or source.
+/data/processed/genomics/
