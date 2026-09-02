@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 5 -- Generative Semantic Fusion Layer
+Phase 6 -- Governance Layer
 
 ## Status
 
@@ -274,6 +274,93 @@ signals directly -- it consumes only the structured embeddings produced by Layer
       it rather than continuing; the user moved the key to `.env` and cleared `.env.example`
       before this phase's work resumed. No leaked key ever reached git history
 
+**Phase 6 -- Governance Layer** (architecture doc Section 7, cross-cutting): "Audit & traceability |
+Every transformation and generative output is logged for post hoc review", "PHI separation", and
+"Bias monitoring"
+- [x] `src/governance/models.py` -- `AuditLogEntry` SQLAlchemy model: `timestamp`, `patient_id`
+      (nullable -- a handful of actions are cohort-level, not about one patient), `pipeline_stage`,
+      `action`, `source_file`, `pipeline_version`
+- [x] `src/governance/audit.py` -- `log_audit_event()`: writes one row. If no `db` session is
+      passed, opens its own short-lived session against the project's real database and, on that
+      fallback path, lazily creates `audit_log` (`checkfirst=True`, idempotent) if it doesn't
+      exist yet -- so every pipeline function below could call this with a single added line, no
+      caller needed to separately provision the table or thread a session through first (this
+      caught a real bug during development: without the lazy-create, adding this call broke the
+      *existing*, unmodified `test_emr_pipeline.py`/`test_wearable_pipeline.py`/
+      `test_genomics_pipeline.py`, none of which pass a `db`, since `audit_log` didn't exist yet
+      in `data/processed/twin.db`)
+- [x] Wired into every Phase 1-5 pipeline entry point -- one added `log_audit_event()` call at
+      the end of each, no existing pipeline logic duplicated or changed:
+      - `run_emr_pipeline_for_patient()` (`src/emr_pipeline/pipeline.py`) -- one row per patient
+      - `run_wearable_pipeline()` (`src/wearable_pipeline/pipeline.py`) -- one row per subject
+        (after the shared cohort-level LSTM training/scoring, since the doc's audit granularity
+        is per-patient even though the underlying model run is cohort-wide)
+      - `run_genomics_pipeline()` (`src/genomics_pipeline/pipeline.py`) -- one row per sample
+        (same reasoning: cohort-level PLINK/SnpEff/gseapy run, per-sample audit rows)
+      - `assemble_and_store_twin()` (`src/digital_twin/assembly.py`) -- one row per twin version,
+        `pipeline_version` recorded as all three source pipeline versions joined
+        (`"emr=...;genomic=...;wearable=..."`, since one twin draws on three)
+      - `store_hypothesis()` (`src/fusion_layer/reasoning.py`) -- one row per patient actually
+        cited in the hypothesis's `source_embedding_ids` (parsed from the
+        `"{patient_id}:v{version}:{domain}"` IDs), `pipeline_version` set to the Claude model used
+      - Each of `run_emr_pipeline_for_patient`/`run_wearable_pipeline`/`run_genomics_pipeline`
+        gained an optional `db: Session | None = None` parameter (default preserves every
+        existing call site's behavior unchanged); `assemble_and_store_twin`/`store_hypothesis`
+        already took `db` as a required parameter from Phase 4/5, so no signature change there
+      - Avoided a real circular-import hazard while wiring this up: `src/governance/phi_check.py`
+        needs to import from `src.emr_pipeline` (reusing its PHI definitions), while
+        `src.emr_pipeline`'s pipeline functions need to import `log_audit_event` from
+        `src.governance` -- eagerly importing `phi_check` at `src/governance/__init__.py`'s top
+        level would make the two packages import each other. Fixed by not importing `phi_check`
+        at the package root (only `audit.py`/`fairness_check.py`/`models.py`, none of which
+        depend on any other phase); callers needing PHI checking import
+        `from src.governance.phi_check import ...` directly. Verified with several import
+        orderings, not just the one that happened to work first
+- [x] `src/emr_pipeline/deidentify.py` -- renamed the module-private `_get_engines()` to a
+      public `get_presidio_engines()` so `phi_check.py` can reuse the same cached
+      (`@lru_cache`) Presidio engine instance rather than constructing (and loading
+      `en_core_web_lg` into) a second one
+- [x] `src/governance/phi_check.py` -- `check_demographics_for_phi()`/`check_notes_for_phi()`/
+      `check_patient_record_for_phi()`: reuses Phase 1's own PHI definitions
+      (`PHI_DEMOGRAPHIC_FIELDS`, `PHI_EXTENSION_URLS`, `PHI_ENTITIES`) and cached Presidio engine
+      rather than redefining what counts as PHI a second time. Demographics check: any
+      `PHI_DEMOGRAPHIC_FIELDS` key or `PHI_EXTENSION_URLS` extension still present should have
+      been dropped outright by Phase 1's `scrub_demographics()`. Notes check: a fresh Presidio
+      re-scan of already-processed note text for the same `PHI_ENTITIES` -- independent of, not a
+      re-run of, Phase 1's own deny-list-plus-Presidio de-identification
+- [x] `src/governance/fairness_check.py` -- `check_subgroup_fairness()`: a fairlearn `MetricFrame`
+      computing a metric per subgroup plus the max difference/ratio across subgroups -- the
+      standard subgroup-disparity summary fairlearn provides out of the box. Explicitly a stub, not
+      a validated bias finding: this project's 5-patient cohort is definitionally too small for
+      any subgroup statistic to mean anything (one patient's value alone can swing a whole
+      subgroup's mean); `n_per_group`/`small_sample_warning` (vs. a documented
+      `MIN_MEANINGFUL_GROUP_SIZE` floor) surface that limitation explicitly rather than silently
+      reporting numbers a reader could mistake for meaningful. No ground-truth outcome labels
+      exist in this demo either, so `y_true` defaults to `y_pred` itself and the demonstration
+      metric is a plain per-group mean -- real usage means wiring in real outcome
+      labels/predictions and real demographic strata (age, sex, ancestry, severity, per the doc)
+      once cohort size is large enough
+- [x] `tests/test_governance.py` (9 tests) -- one audit-log-entry test per Phase 1-5 pipeline
+      entry point (EMR/wearable/genomics run for real, digital twin assembly and fusion layer
+      hypothesis generation use lightweight/mocked inputs matching each phase's own test
+      convention); PHI check flags a deliberately-inserted PHI value and passes on clean
+      synthetic data; a third, stronger PHI check test runs the real EMR pipeline end-to-end and
+      confirms no *actual* patient identifier leaked into any check finding (see below for why it
+      doesn't assert zero findings); fairness check stub runs and correctly flags the small-sample
+      warning
+- [x] A real, interesting finding surfaced while writing the third PHI check test: Presidio's
+      fresh re-scan of already-de-identified note text flagged a literal `http://snomed.info/sct`
+      coding-system URL as `PERSON`, repeatedly -- not real PHI. Root cause: Phase 1's own
+      anonymization already replaced nearby content with placeholder tags like `<US_SSN>`/
+      `<DATE_TIME>`, and those placeholder tags change the surrounding text enough to trigger a
+      *new* false-positive NER match that wasn't present in the original pass (confirmed by
+      inspecting the actual note text: `'...Code: http://snomed.info/sct <US_SSN>. Start:...'`).
+      This is the independent post-hoc check correctly re-verifying downstream output -- exactly
+      what it's for -- not a bug in `phi_check.py` or in Phase 1's de-identification. Left the
+      check's logic as-is (a faithful reuse of Presidio/Phase 1's PHI definitions) rather than
+      adding suppression logic to hide it; the test instead asserts that no finding's flagged text
+      matches this patient's actual known identifiers, which passes. See Known Issues.
+
 ## Test Status
 
 Verified in both environments:
@@ -398,6 +485,32 @@ Also verified live against the real Claude API (outside pytest, `ANTHROPIC_API_K
 one direct `generate_hypothesis()` call, then `run_fusion_layer_for_cohort()` for all 5 real
 digital twins -- see Phase 5 completed notes above.
 
+Local venv, full suite including the new governance tests (2026-09-02):
+```
+74 passed, 1 warning in 203.69s (0:03:23)
+```
+`tests/test_governance.py` (9 tests) -- PASSED.
+
+Docker (`docker compose build` then `docker compose run --rm app pytest -q`, 2026-09-02). No new
+system dependencies (`fairlearn` is pure-Python, picked up by the existing
+`pip install -r requirements.txt` step):
+```
+74 passed in 543.63s (0:09:03)
+```
+All 74 tests, across all eight test files, pass in both environments. Slower than local venv here
+specifically because `test_governance.py`'s audit-log tests re-run the real EMR/wearable/genomics
+pipelines (CPU-bound in the container, same as `test_emr_pipeline.py` etc.) on top of everything
+those files already run.
+
+Note: because `run_emr_pipeline_for_patient`/`run_wearable_pipeline`/`run_genomics_pipeline`'s
+audit logging falls back to the real `data/processed/twin.db` whenever no `db` is passed (see
+Phase 6 completed notes above), and `tests/test_{emr,wearable,genomics}_pipeline.py` were
+deliberately left unmodified (per this phase's "don't touch existing pipeline logic" instruction)
+rather than updated to inject an isolated session, every full-suite test run appends real rows to
+that database's `audit_log` table -- by design (an audit log is supposed to capture every real
+invocation, tests included), not a leak or a bug, but worth knowing if `audit_log`'s row count
+looks larger than "5 patients x however many phases" would suggest.
+
 ## Known Issues / Blockers
 
 - The EMR, wearable, and genomics source datasets have **disjoint patient ID spaces** (Synthea
@@ -435,10 +548,20 @@ digital twins -- see Phase 5 completed notes above.
   (Chief Complaint / HPI / Assessment and Plan). The C-CDA merge is still wired in and adds some
   value/diversity but is largely redundant with those; could be dropped later to cut pipeline
   runtime if it matters.
-- No pipeline logic yet for `src/governance/` (still an empty package) -- de-identification
-  already happens inline in `src/emr_pipeline/deidentify.py` (Phase 1), but there's no
-  cross-cutting audit-logging/institutional-boundary layer yet, per the doc's Section 7
-  governance requirements.
+- Presidio's PHI re-scan (`src/governance/phi_check.py`) can flag benign false positives on
+  already-processed note text that its own (or Phase 1's) anonymization placeholder tags
+  introduced -- e.g. a literal `http://snomed.info/sct` coding-system URL getting misclassified
+  as `PERSON` once a neighboring `<US_SSN>`/`<DATE_TIME>` tag changes local context (see Phase 6
+  completed notes above for the confirmed root cause). This is the check correctly catching
+  *something*, just not real PHI -- always check a finding's flagged snippet against the
+  patient's actual known identifiers (`known_identifier_strings()`) before treating a `passed:
+  False` result as a genuine leak, exactly as `tests/test_governance.py`'s third PHI check test
+  does.
+- No cross-cutting audit-logging/institutional-boundary enforcement beyond what Phase 6 built
+  (audit logging + PHI/fairness check stubs) -- "institutional boundaries" (doc: "local data
+  stays within institutional boundaries; only embeddings/model updates move", e.g. federated
+  learning frameworks) is still entirely unaddressed, since this demo has always run as a single
+  local instance with no multi-institution data-sharing scenario to enforce boundaries between.
 - The 2 hypotheses currently stored in `data/processed/twin.db`'s `hypotheses` table were
   generated from that same database's 5 digital twins, which (see the ID-space issue
   above) are an arbitrary positional pairing across three unrelated datasets, not real linked
@@ -464,11 +587,20 @@ digital twins -- see Phase 5 completed notes above.
 - A real cross-domain patient identity mapping, if/when one becomes available -- the current
   positional pairing (see Known Issues) is a demo convenience, not something to build Phase 5
   reasoning claims on top of as if it were real linked patient data
-- `src/governance/`: cross-cutting audit logging and institutional-boundary enforcement (doc
-  Section 7) -- still an empty package; de-identification itself already exists (Phase 1) but
-  isn't yet paired with an audit trail of who/what touched de-identified data downstream
 - Add `ANTHROPIC_API_KEY` (and any Docker-specific env wiring) to `docker-compose.yml`/`.env`
   handling if the fusion layer needs to run inside Docker against the live API -- the test
   suite doesn't need it (mocked), but a real Docker-based demo run would
 - Wire `src/fusion_layer/` into `api`/`app` so hypotheses can be triggered/viewed through the
   actual application rather than only via direct Python calls
+- Institutional-boundary enforcement (doc Section 7: "local data stays within institutional
+  boundaries; only embeddings/model updates move", e.g. federated learning frameworks) -- not
+  addressed by Phase 6's audit logging/PHI check/fairness stub, and genuinely out of scope for a
+  single-instance local demo; would only become relevant if this ever ran across more than one
+  institution's data
+- A real bias-monitoring run once cohort size is large enough for `check_subgroup_fairness()`'s
+  numbers to mean something (see Phase 6 completed notes and Known Issues -- `MIN_MEANINGFUL_GROUP_SIZE`
+  is never met at 5 patients), with real outcome labels/predictions and real demographic strata
+  in place of the current stub's placeholder `y_true=y_pred` and synthetic subgroup splits
+- Consider exposing `AuditLogEntry`/`Hypothesis` read access (e.g. via `api/`) for the "post hoc
+  review" the doc's audit-logging concern is actually for -- right now both are queryable only
+  by direct SQLAlchemy access, not through any part of the running application

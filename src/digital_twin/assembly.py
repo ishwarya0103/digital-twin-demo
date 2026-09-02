@@ -8,6 +8,7 @@ import numpy as np
 from sqlalchemy.orm import Session
 
 from src.digital_twin.models import DigitalTwin
+from src.governance.audit import log_audit_event
 
 
 def _as_list(embedding: np.ndarray) -> list[float]:
@@ -50,4 +51,14 @@ def assemble_and_store_twin(
     db.add(twin)
     db.commit()
     db.refresh(twin)
+
+    log_audit_event(
+        pipeline_stage="digital_twin_assembly",
+        action="assemble_and_store_twin",
+        patient_id=patient_id,
+        source_file=None,  # an assembly of three already-structured embeddings, not one raw file
+        pipeline_version=f"emr={emr_pipeline_version};genomic={genomic_pipeline_version};wearable={wearable_pipeline_version}",
+        db=db,
+    )
+
     return twin

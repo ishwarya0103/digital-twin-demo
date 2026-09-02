@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from src.fusion_layer.models import Hypothesis
+from src.governance.audit import log_audit_event
 
 DEFAULT_MODEL = "claude-sonnet-5"
 
@@ -187,6 +188,21 @@ def store_hypothesis(db: Session, hypothesis: dict, model: str) -> Hypothesis:
     db.add(row)
     db.commit()
     db.refresh(row)
+
+    # One audit row per patient this hypothesis actually draws on -- source_embedding_ids are
+    # "{patient_id}:v{version}:{domain}" strings (formatting.py's embedding_id()), so the
+    # patient_id is always the first colon-separated component.
+    source_patient_ids = sorted({eid.split(":")[0] for eid in hypothesis["source_embedding_ids"]})
+    for patient_id in source_patient_ids:
+        log_audit_event(
+            pipeline_stage="fusion_layer",
+            action="generate_and_store_hypothesis",
+            patient_id=patient_id,
+            source_file=None,
+            pipeline_version=model,
+            db=db,
+        )
+
     return row
 
 

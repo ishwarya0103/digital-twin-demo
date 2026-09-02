@@ -10,6 +10,7 @@ chromadb
 # Governance / de-identification (Section 7, governance layer)
 presidio-analyzer
 presidio-anonymizer
+fairlearn
 
 # EMR pipeline: clinical NLP (Section 3.1)
 transformers

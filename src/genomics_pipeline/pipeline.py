@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+from sqlalchemy.orm import Session
 
 from src.genomics_pipeline.annotation import annotate_variants
 from src.genomics_pipeline.config import PIPELINE_VERSION
@@ -16,12 +17,14 @@ from src.genomics_pipeline.gwas import (
 from src.genomics_pipeline.models import GenomicPathwayProfile
 from src.genomics_pipeline.pathway_aggregation import run_pathway_enrichment
 from src.genomics_pipeline.vcf_loader import discover_vcf, load_samples, load_variant_table
+from src.governance.audit import log_audit_event
 
 
 def run_genomics_pipeline(
     raw_dir: str = "data/raw/genomics",
     work_dir: str = "data/processed/genomics",
     pipeline_version: str = PIPELINE_VERSION,
+    db: Session | None = None,
 ) -> list[GenomicPathwayProfile]:
     vcf_path = discover_vcf(raw_dir)
     work_dir = Path(work_dir).resolve()
@@ -50,7 +53,7 @@ def run_genomics_pipeline(
     enrichments = run_pathway_enrichment(annotations, pipeline_version)
 
     # Stage 5: per-patient embedding
-    return [
+    profiles = [
         build_patient_profile(
             patient_id=sample,
             pipeline_version=pipeline_version,
@@ -62,3 +65,15 @@ def run_genomics_pipeline(
         )
         for sample in samples
     ]
+
+    for sample in samples:
+        log_audit_event(
+            pipeline_stage="genomics_pipeline",
+            action="run_genomics_pipeline",
+            patient_id=sample,
+            source_file=str(vcf_path),
+            pipeline_version=pipeline_version,
+            db=db,
+        )
+
+    return profiles

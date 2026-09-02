@@ -45,7 +45,7 @@ PHI_ENTITIES = (
 
 
 @lru_cache(maxsize=1)
-def _get_engines() -> tuple[AnalyzerEngine, AnonymizerEngine]:
+def get_presidio_engines() -> tuple[AnalyzerEngine, AnonymizerEngine]:
     return AnalyzerEngine(), AnonymizerEngine()
 
 
@@ -96,7 +96,7 @@ def _deny_list_scrub(text: str, deny_terms: list[str]) -> str:
 def scrub_note_text(text: str, deny_terms: list[str] | None = None) -> str:
     if deny_terms:
         text = _deny_list_scrub(text, deny_terms)
-    analyzer, anonymizer = _get_engines()
+    analyzer, anonymizer = get_presidio_engines()
     results = analyzer.analyze(text=text, language="en", entities=list(PHI_ENTITIES))
     return anonymizer.anonymize(text=text, analyzer_results=results).text
 

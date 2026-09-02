@@ -1,5 +1,8 @@
 from pathlib import Path
 
+from sqlalchemy.orm import Session
+
+from src.governance.audit import log_audit_event
 from src.wearable_pipeline.embedding import build_wearable_profile
 from src.wearable_pipeline.feature_extraction import extract_window_features
 from src.wearable_pipeline.model import score_window, train_model
@@ -43,6 +46,7 @@ def run_wearable_pipeline(
     pipeline_version: str = PIPELINE_VERSION,
     epochs: int = 150,
     seed: int = 0,
+    db: Session | None = None,
 ) -> list[WearableProfile]:
     subjects = discover_subjects(raw_dir)
 
@@ -58,9 +62,21 @@ def run_wearable_pipeline(
         window.activation_score = score
         window.hidden_state = hidden
 
-    return [
+    profiles = [
         build_wearable_profile(
             [w for w in all_windows if w.patient_id == subject], subject, pipeline_version
         )
         for subject in subjects
     ]
+
+    for subject in subjects:
+        log_audit_event(
+            pipeline_stage="wearable_pipeline",
+            action="run_wearable_pipeline",
+            patient_id=subject,
+            source_file=str(Path(raw_dir) / subject),
+            pipeline_version=pipeline_version,
+            db=db,
+        )
+
+    return profiles
