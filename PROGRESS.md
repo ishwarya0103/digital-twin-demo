@@ -2,11 +2,23 @@
 
 ## Current Phase
 
-Phase 7 -- API + Demo UI
+Phase 8 -- Final Review
 
 ## Status
 
-Complete
+Complete -- all 8 phases complete
+
+| Phase | Name | Status |
+|---|---|---|
+| 0 | Project scaffolding | Complete |
+| 1 | EMR pipeline | Complete |
+| 2 | Wearable pipeline | Complete |
+| 3 | Genomics pipeline | Complete |
+| 4 | Digital Twin Abstraction Layer | Complete |
+| 5 | Generative Semantic Fusion Layer | Complete |
+| 6 | Governance Layer | Complete |
+| 7 | API + Demo UI | Complete |
+| 8 | Final Review | Complete |
 
 ## Completed
 
@@ -421,6 +433,26 @@ request; both only ever serve/display already-computed, already-stored data
       (6 source_embedding_ids, correctly *not* patient-1's) when patient-3 is selected. No
       console errors. Stopped both containers afterward (`docker compose down`)
 
+**Phase 8 -- Final Review**
+- [x] Ran the full pytest suite (all nine test files, covering all seven working phases) in both
+      local venv and Docker. All 87 tests passed in both -- no failures found, so there was
+      nothing to fix
+- [x] Rewrote `README.md` end to end as the project's front door: what this project is, an
+      architecture overview table, a `docker compose up --build` quick start with the exact URLs
+      for the API and the Streamlit UI, consolidated data-placement instructions (what's
+      committed vs. what needs to be downloaded/generated and where it goes), local (non-Docker)
+      setup, the API reference, and the test-running instructions -- reorganizing and tightening
+      material that had accreted phase-by-phase rather than dropping any of the operational
+      detail those phases established
+- [x] Added a "Migrating to PostgreSQL later" section to the README: uncomment the `postgres`
+      service block in `docker-compose.yml`, set `DATABASE_URL` in `.env` to a PostgreSQL
+      connection string, `docker compose up --build` -- no code changes, since `src/db/session.py`
+      already builds its engine from whatever `DATABASE_URL` it finds and every model uses
+      portable SQLAlchemy column types
+- [x] Added a phase-completion overview table at the top of this file (all 8 phases, all
+      Complete) -- the detailed per-phase logs below are unchanged, this is a quick-glance summary
+      on top of them, not a replacement
+
 ## Test Status
 
 Verified in both environments:
@@ -590,6 +622,21 @@ Also verified for real, outside pytest: both Docker services running together (`
 browser -- patient picker, all three domain-filter tabs, and both real Phase 5 hypotheses (correctly
 different per patient) all confirmed rendering correctly with no console errors. See Phase 7
 completed notes above for detail. Stopped both containers afterward.
+
+**Final full-suite run (Phase 8, 2026-09-02)** -- all 87 tests, across all nine test files, no
+changes since Phase 7's run:
+
+Local venv:
+```
+87 passed, 1 warning in 211.13s (0:03:31)
+```
+
+Docker (`docker compose build` then `docker compose run --rm app pytest -q`):
+```
+87 passed in 443.89s (0:07:23)
+```
+
+No failing tests found -- nothing needed fixing.
 
 ## Known Issues / Blockers
 
