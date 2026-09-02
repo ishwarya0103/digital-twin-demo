@@ -22,6 +22,13 @@ RUN python -m spacy download en_core_web_lg
 # requirements.txt change, not on every source edit.
 RUN python -c "from transformers import AutoTokenizer, AutoModel; AutoTokenizer.from_pretrained('emilyalsentzer/Bio_ClinicalBERT'); AutoModel.from_pretrained('emilyalsentzer/Bio_ClinicalBERT')"
 
+# Includes data/processed/twin.db -- the pre-populated demo database (5 patients, their
+# digital twins, and the fusion layer's generated hypotheses) -- via the .dockerignore
+# exception carved out of its otherwise-blanket data/processed/*.db exclusion. Baking it in
+# means the demo has real data to show immediately on a host with no persistent volume
+# mounted, without needing to re-run any pipeline first. docker-compose.yml's
+# ./data:/app/data volume mount still takes precedence for local dev (so this baked-in copy
+# is what a plain `docker run` with no volume falls back to, not what overrides local runs).
 COPY . .
 
 ENV PYTHONPATH=/app

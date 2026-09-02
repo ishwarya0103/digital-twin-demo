@@ -2,11 +2,11 @@
 
 ## Current Phase
 
-Phase 9 -- Clinical-language hypotheses (post-review refinement)
+Phase 10 -- Deployment: bake in the pre-populated demo database
 
 ## Status
 
-Complete -- all 8 original phases plus this refinement complete
+Complete -- all 8 original phases plus both post-review refinements complete
 
 | Phase | Name | Status |
 |---|---|---|
@@ -20,6 +20,7 @@ Complete -- all 8 original phases plus this refinement complete
 | 7 | API + Demo UI | Complete |
 | 8 | Final Review | Complete |
 | 9 | Clinical-language hypotheses (refinement) | Complete |
+| 10 | Deployment: bake in the demo database (refinement) | Complete |
 
 ## Completed
 
@@ -548,6 +549,37 @@ Layer 2 storage into Layer 3's prompt, the API, and the UI
       those tests' assertions to also cover the new summary fields rather than just adding
       placeholder values to keep them passing
 
+**Phase 10 -- Deployment: bake in the pre-populated demo database**: so the demo has real data to
+show immediately on a host with no persistent volume mounted (e.g. a plain `docker run`, or a
+hosting platform that doesn't attach one), rather than coming up empty until someone re-runs the
+Phase 1-5 pipelines by hand
+- [x] `.dockerignore` previously excluded `data/processed/*.db` unconditionally -- that's why
+      `data/processed/twin.db` was never in the image before, not anything about the Dockerfile's
+      `COPY . .` itself. Added a scoped `!data/processed/twin.db` negation so just that one file
+      (5 patients, their digital twins, and both fusion-layer hypotheses -- 192KB) makes it into
+      the build context; `data/raw/`, `chroma_db/`, and any other `data/processed/*.db` file stay
+      excluded
+- [x] `docker/Dockerfile` -- no new `COPY` step needed; the existing `COPY . .` already picks up
+      `twin.db` once `.dockerignore` allows it through. Added a comment there explaining why the
+      image now contains a database file and clarifying that `docker-compose.yml`'s
+      `./data:/app/data` volume mount still takes precedence for local dev -- the baked-in copy is
+      what a plain `docker run` (no volume) falls back to, not something that overrides local runs
+- [x] Verified the built image actually contains the *populated* database, not an empty one, three
+      ways: (1) `docker run --rm <image> ls -la /app/data/processed/twin.db` -- present, 196608
+      bytes, matching the host file's size exactly; (2) ran a Python one-liner inside a fresh
+      container (still no volume) querying the DB directly -- 5 twins (`patient-1`..`patient-5`),
+      2 hypotheses; (3) started the actual API server in a container with **no volume mount at
+      all** (`docker run -p 8010:8000 <image>`, deliberately not `docker compose up`, so nothing
+      could be masking an empty baked-in DB with host data) and confirmed `GET /patients` and
+      `GET /patient/patient-1/hypotheses` return the same real patients and the same
+      clinically-worded Phase 9 hypothesis over HTTP
+- [x] Confirmed `docker compose up` (with its volume mount) still works unchanged -- the host's
+      live `data/processed/twin.db` still takes precedence there, exactly as before; the two
+      behaviors (baked-in fallback vs. volume-mounted local persistence) coexist without conflict
+- [x] Confirmed `data/processed/twin.db` remains gitignored (`.gitignore` is untouched -- only
+      `.dockerignore`, a separate mechanism, changed) -- this change affects what goes into Docker
+      image layers, not what git tracks
+
 ## Test Status
 
 Verified in both environments:
@@ -755,6 +787,14 @@ regenerated all 5 twins and both hypotheses, confirmed zero vector-math markers 
 hypothesis text by direct string search, then rebuilt both Docker services and confirmed the new
 clinical-language output over both the API (`curl`) and the actual Streamlit UI in a browser.
 
+**Phase 10 (2026-09-02)** -- no code changes, so no new pytest coverage; verified entirely by
+directly exercising the built image (see Phase 10 completed notes above for the three checks):
+file presence/size inside the image, a direct DB query inside a volume-less container, and a full
+HTTP round-trip against a container started with no volume mount at all
+(`docker run -p 8010:8000 <image>`, deliberately bypassing `docker compose` so nothing could mask
+an empty baked-in database with host data). `docker compose up`'s volume-mounted local-dev
+behavior reconfirmed unchanged alongside it.
+
 ## Known Issues / Blockers
 
 - The EMR, wearable, and genomics source datasets have **disjoint patient ID spaces** (Synthea
@@ -884,3 +924,7 @@ clinical-language output over both the API (`curl`) and the actual Streamlit UI 
   they reach the prompt (e.g. patient-1 alone has 30 diagnoses) -- not confirmed as the cause of
   Phase 9's two formatting misses, but shorter, more focused prompts are generally cheaper and
   less likely to strain structured output regardless.
+- The database baked into the image (Phase 10) is a point-in-time snapshot, not a live sync --
+  if the demo data is ever regenerated (real 1000 Genomes VCF, a real patient-identity mapping,
+  etc.), the image needs a fresh `docker compose build` to pick up the new
+  `data/processed/twin.db`; nothing currently automates that refresh.

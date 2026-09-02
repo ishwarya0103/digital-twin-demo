@@ -6,4 +6,8 @@ __pycache__
 .pytest_cache
 data/raw
 data/processed/*.db
+# Exception: bake the pre-populated demo database (5 patients, their digital twins, and the
+# fusion layer's generated hypotheses) into the image, so the demo works immediately on a host
+# with no persistent volume mounted -- see docker/Dockerfile's COPY . . comment.
+!data/processed/twin.db
 .env
