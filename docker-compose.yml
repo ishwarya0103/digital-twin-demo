@@ -10,6 +10,22 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL:-}
 
+  # Streamlit demo UI (app/main.py) -- same image as `app` above, just a different command, so
+  # it shares the same dependencies without a second Dockerfile. Talks to `app`'s API over the
+  # compose network (API_BASE_URL uses the service name `app`, resolved via Docker's internal
+  # DNS) rather than importing src/ or touching the database directly.
+  streamlit:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: streamlit run app/main.py --server.address=0.0.0.0 --server.port=8501
+    ports:
+      - "8501:8501"
+    environment:
+      - API_BASE_URL=http://app:8000
+    depends_on:
+      - app
+
   # Placeholder for later migration from SQLite to PostgreSQL.
   # Uncomment and set DATABASE_URL (in .env) to something like
   # postgresql+psycopg2://twin:twin@postgres:5432/twin to switch --

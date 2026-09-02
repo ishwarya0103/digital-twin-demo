@@ -10,6 +10,7 @@ from src.fusion_layer.reasoning import (
     get_anthropic_client,
     store_hypothesis,
 )
+from src.fusion_layer.retrieval import get_hypotheses_for_patient
 from src.fusion_layer.vector_store import get_chroma_client, query_similar, upsert_twin_embeddings
 
 __all__ = [
@@ -24,6 +25,7 @@ __all__ = [
     "generate_hypothesis",
     "get_anthropic_client",
     "get_chroma_client",
+    "get_hypotheses_for_patient",
     "query_similar",
     "run_fusion_layer_for_cohort",
     "store_hypothesis",

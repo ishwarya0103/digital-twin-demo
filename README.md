@@ -56,8 +56,28 @@ python -m spacy download en_core_web_lg  # NLP engine Presidio uses for de-ident
 docker compose up --build
 ```
 
-The app is served on `http://localhost:8000`. `./data` is mounted into the container so the SQLite
-database at `data/processed/twin.db` persists across restarts.
+Starts two services: the FastAPI backend (`app`, `http://localhost:8000` -- see `/docs` for the
+interactive OpenAPI UI) and the Streamlit demo UI (`streamlit`, `http://localhost:8501`), which
+talks to the API over the Docker network rather than touching the database directly. `./data` is
+mounted into both containers so the SQLite database at `data/processed/twin.db` persists across
+restarts and is shared between them.
+
+To run just the API locally without Docker: `uvicorn api.main:app --reload`. To run just the
+Streamlit UI locally: `API_BASE_URL=http://localhost:8000 streamlit run app/main.py` (defaults to
+that same URL if unset).
+
+### API
+
+Read-only access to the digital twin store (Phase 4) and the fusion layer's generated hypotheses
+(Phase 5) -- nothing here runs a pipeline or calls the Claude API on request, it only serves
+already-computed, already-stored data.
+
+- `GET /patients` -- every patient_id with a stored digital twin
+- `GET /patient/{id}/full-twin` -- the whole twin: all three domains, each labeled with its own
+  `pipeline_version`
+- `GET /patient/{id}/emr`, `/genomic`, `/wearable` -- just one domain's embedding + pipeline_version
+- `GET /patient/{id}/hypotheses` -- stored hypotheses citing this patient, each with its
+  `source_embedding_ids` (traceability references)
 
 ## Wearable data
 

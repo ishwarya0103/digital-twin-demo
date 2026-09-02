@@ -2,6 +2,7 @@
 fastapi
 uvicorn[standard]
 streamlit
+requests
 
 # Database
 sqlalchemy

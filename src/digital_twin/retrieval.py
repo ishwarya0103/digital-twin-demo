@@ -10,6 +10,14 @@ from src.digital_twin.models import DigitalTwin
 DOMAINS = ("emr", "genomic", "wearable")
 
 
+def list_patient_ids(db: Session) -> list[str]:
+    """Every patient_id with at least one stored digital twin, sorted -- used by the API's
+    /patients endpoint (api/main.py) so the demo UI can populate its patient picker from
+    whatever's actually in the database rather than a hardcoded list."""
+    rows = db.query(DigitalTwin.patient_id).distinct().order_by(DigitalTwin.patient_id).all()
+    return [row[0] for row in rows]
+
+
 def get_twin(db: Session, patient_id: str, version: int | None = None) -> DigitalTwin | None:
     """The full twin record for a patient: the latest version by default, or a specific
     `version` if given. None if no twin has been assembled for this patient (and version,

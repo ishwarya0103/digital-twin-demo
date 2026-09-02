@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 6 -- Governance Layer
+Phase 7 -- API + Demo UI
 
 ## Status
 
@@ -361,6 +361,66 @@ Every transformation and generative output is logged for post hoc review", "PHI 
       adding suppression logic to hide it; the test instead asserts that no finding's flagged text
       matches this patient's actual known identifiers, which passes. See Known Issues.
 
+**Phase 7 -- API + Demo UI**: read-only FastAPI access to the digital twin store (Phase 4) and the
+fusion layer's generated hypotheses (Phase 5), plus a Streamlit UI over that API -- "the doctor-
+facing view" the task described. Nothing in either layer runs a pipeline or calls the Claude API on
+request; both only ever serve/display already-computed, already-stored data
+- [x] `api/schemas.py` -- Pydantic response models kept separate from routing logic:
+      `FullTwinResponse` (nests each domain's `pipeline_version`+`embedding` under its own key,
+      so a domain-filtered response is structurally a strict subset of the full-twin response,
+      not just conventionally one), `DomainResponse` (`patient_id`, `version`, `domain`,
+      `pipeline_version`, `embedding` -- no field that could ever carry another domain's data),
+      `HypothesisResponse`/`HypothesesResponse`, `PatientsResponse`
+- [x] `api/main.py` -- `GET /patients` (every patient_id with a stored twin -- what the UI's
+      picker populates itself from), `GET /patient/{id}/full-twin`, `GET /patient/{id}/{emr,
+      genomic,wearable}` (404 if no twin exists for that patient), `GET /patient/{id}/hypotheses`
+      (200 + empty list for a patient with none -- that's a valid result, not an error). A
+      `lifespan` handler now calls `Base.metadata.create_all(bind=engine)` on startup -- the API
+      is the first part of the running application (as opposed to a test fixture or one-off
+      verification script) that needs the digital_twins/hypotheses/audit_log tables to already
+      exist, so this finally closes a gap every earlier phase's tests/scripts had to work around
+      individually
+- [x] `src/digital_twin/retrieval.py` -- added `list_patient_ids()` (distinct patient_ids with a
+      stored twin); `src/fusion_layer/retrieval.py` -- added `get_hypotheses_for_patient()`,
+      matching by parsing each `source_embedding_ids` entry's leading `"{patient_id}:..."`
+      component (there's no `patient_id` column on `Hypothesis` since one hypothesis can span
+      several patients) rather than a database-level JSON query, portable across SQLite/Postgres
+- [x] `app/main.py` -- Streamlit UI: a patient picker (populated from `/patients`, not
+      hardcoded); a "Digital Twin" tab with nested tabs ("All domains"/"EMR only"/"Genomic
+      only"/"Wearable only") rendering each domain's embedding as a line chart labeled with its
+      pipeline_version; a "Hypotheses" tab listing every hypothesis for the selected patient with
+      its supporting evidence and a `source_embedding_ids` traceability block. Talks to the API
+      over HTTP (`requests`, `API_BASE_URL` env var, defaults to `http://localhost:8000`) rather
+      than importing `src/` or querying the database directly, so the UI only ever sees what the
+      API actually serves -- the same contract any other API client would have
+- [x] `docker-compose.yml` -- added a `streamlit` service (same image as the existing `app`
+      service, built from the same `docker/Dockerfile`, just a different `command:` override --
+      no second Dockerfile needed) on port 8501, reaching the API over the compose network at
+      `http://app:8000` (Docker's internal DNS resolves the service name). Kept the existing `app`
+      service's name as-is rather than renaming it to `api` -- avoided unnecessary churn against
+      already-documented commands (`docker compose run --rm app pytest`, used throughout
+      PROGRESS.md and README.md) for a purely cosmetic rename
+- [x] `tests/test_api.py` (13 tests) -- against an isolated in-memory SQLite database
+      (`StaticPool` + `check_same_thread=False`, needed because `TestClient` dispatches route
+      handlers on a worker thread, not the test's own thread -- a bare in-memory SQLite
+      connection is both thread-bound and, per connection, its own separate empty database)
+      wired in via FastAPI's `dependency_overrides`: every endpoint returns 200 with
+      correctly-shaped data against a twin whose three domains carry distinct,
+      individually-recognizable embeddings; each domain endpoint's response never contains
+      another domain's key, embedding, or pipeline_version (checked positively -- the returned
+      values are compared against the *other* domains' actual seeded values, not just "some
+      value present"); 404s for an unknown patient; hypotheses endpoint returns the seeded
+      hypothesis with its `source_embedding_ids` intact, and 200 + empty list (not 404) for a
+      patient with none yet
+- [x] Verified end-to-end for real, not just via pytest: built and ran both Docker services
+      (`docker compose up -d`), confirmed `/health` and `/patients` respond correctly from the
+      host and the Streamlit UI at `localhost:8501` is reachable, then drove the actual UI in a
+      browser -- selected different patients, confirmed each domain-only tab shows only that
+      domain's chart, confirmed the Hypotheses tab shows patient-1/2/4's real Phase 5 hypothesis
+      (9 source_embedding_ids) when patient-1 is selected and patient-3/5's different hypothesis
+      (6 source_embedding_ids, correctly *not* patient-1's) when patient-3 is selected. No
+      console errors. Stopped both containers afterward (`docker compose down`)
+
 ## Test Status
 
 Verified in both environments:
@@ -511,6 +571,26 @@ that database's `audit_log` table -- by design (an audit log is supposed to capt
 invocation, tests included), not a leak or a bug, but worth knowing if `audit_log`'s row count
 looks larger than "5 patients x however many phases" would suggest.
 
+Local venv, full suite including the new API tests (2026-09-02):
+```
+87 passed, 1 warning in 203.23s (0:03:23)
+```
+`tests/test_api.py` (13 tests) -- PASSED.
+
+Docker (`docker compose build` then `docker compose run --rm app pytest -q`, 2026-09-02). No new
+system dependencies (`requests` is pure-Python, picked up by the existing
+`pip install -r requirements.txt` step):
+```
+87 passed in 535.44s (0:08:55)
+```
+All 87 tests, across all nine test files, pass in both environments.
+
+Also verified for real, outside pytest: both Docker services running together (`docker compose up
+-d`), API endpoints checked via `curl` from the host, and the Streamlit UI driven directly in a
+browser -- patient picker, all three domain-filter tabs, and both real Phase 5 hypotheses (correctly
+different per patient) all confirmed rendering correctly with no console errors. See Phase 7
+completed notes above for detail. Stopped both containers afterward.
+
 ## Known Issues / Blockers
 
 - The EMR, wearable, and genomics source datasets have **disjoint patient ID spaces** (Synthea
@@ -587,11 +667,6 @@ looks larger than "5 patients x however many phases" would suggest.
 - A real cross-domain patient identity mapping, if/when one becomes available -- the current
   positional pairing (see Known Issues) is a demo convenience, not something to build Phase 5
   reasoning claims on top of as if it were real linked patient data
-- Add `ANTHROPIC_API_KEY` (and any Docker-specific env wiring) to `docker-compose.yml`/`.env`
-  handling if the fusion layer needs to run inside Docker against the live API -- the test
-  suite doesn't need it (mocked), but a real Docker-based demo run would
-- Wire `src/fusion_layer/` into `api`/`app` so hypotheses can be triggered/viewed through the
-  actual application rather than only via direct Python calls
 - Institutional-boundary enforcement (doc Section 7: "local data stays within institutional
   boundaries; only embeddings/model updates move", e.g. federated learning frameworks) -- not
   addressed by Phase 6's audit logging/PHI check/fairness stub, and genuinely out of scope for a
@@ -601,6 +676,18 @@ looks larger than "5 patients x however many phases" would suggest.
   numbers to mean something (see Phase 6 completed notes and Known Issues -- `MIN_MEANINGFUL_GROUP_SIZE`
   is never met at 5 patients), with real outcome labels/predictions and real demographic strata
   in place of the current stub's placeholder `y_true=y_pred` and synthetic subgroup splits
-- Consider exposing `AuditLogEntry`/`Hypothesis` read access (e.g. via `api/`) for the "post hoc
-  review" the doc's audit-logging concern is actually for -- right now both are queryable only
-  by direct SQLAlchemy access, not through any part of the running application
+- Phase 7's API is read-only -- viewing hypotheses is wired into the app now, but *triggering* a
+  pipeline run or a new fusion-layer hypothesis generation still requires direct Python calls
+  (`orchestrate_twins_for_cohort()`, `run_fusion_layer_for_cohort()`), not anything reachable
+  through `api`/`app`. A `POST` endpoint (or an admin action in the Streamlit UI) to kick off
+  either would close that gap, but needs its own thinking about request duration (the wearable/
+  genomics cohort pipelines take minutes) and about not exposing `ANTHROPIC_API_KEY` usage to
+  arbitrary API callers without some access control first (see below).
+- `AuditLogEntry` still has no read endpoint (`Hypothesis` now does, via `/patient/{id}/hypotheses`)
+  -- the "post hoc review" the doc's audit-logging concern is actually for still means direct
+  SQLAlchemy access to `data/processed/twin.db`'s `audit_log` table, not anything through the
+  running application.
+- No authentication/access control on any API endpoint -- fine for a local single-user demo, but
+  worth flagging explicitly before this is ever reachable from anywhere other than localhost/a
+  trusted Docker network, since it currently serves patient-level data (synthetic, but still
+  structured the way real patient data would be) to any caller that can reach port 8000.
