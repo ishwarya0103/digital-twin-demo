@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 4 -- Digital Twin Abstraction Layer
+Phase 5 -- Generative Semantic Fusion Layer
 
 ## Status
 
@@ -207,6 +207,73 @@ this layer
       (EMR 768, genomic 15, wearable 16) and correct per-domain pipeline_versions; verified via
       both `get_twin()` and `get_twin_domain()` for every patient and domain
 
+**Phase 5 -- Generative Semantic Fusion Layer** (architecture doc Section 5, "Layer 3"), which
+"performs cross-modal reasoning but never touches raw EMR text, genomic sequences, or physiological
+signals directly -- it consumes only the structured embeddings produced by Layer 1"
+- [x] `src/fusion_layer/formatting.py` -- `format_patient_summary()`/`format_cluster_summary()`
+      turn one or more `DigitalTwin` rows into structured prompt text: per-domain summary
+      statistics (dimensionality, L2 norm, mean, std) and traceability labels
+      (`pipeline_version`, `embedding_id`) only, never the embeddings' own raw values (dumping
+      hundreds of floats into a prompt isn't "structured text" the reasoning engine can use
+      anyway) and never any raw domain data (which `DigitalTwin` rows never contain to begin
+      with). `embedding_id()` (`"{patient_id}:v{version}:{domain}"`) is the canonical ID reused
+      across chromadb entries, prompt text, and a hypothesis's `source_embedding_ids`, so all
+      three can be cross-referenced
+- [x] `src/fusion_layer/clustering.py` -- `cluster_twins()`: scikit-learn `KMeans` over each
+      patient's concatenated (EMR+genomic+wearable) embedding -- the digital twin's own
+      definition (architecture doc Section 4) -- standardized per-feature first so EMR's 768
+      dimensions don't swamp genomic's ~15 and wearable's 16 in the distance metric.
+      `n_clusters` capped at the sample count
+- [x] `src/fusion_layer/vector_store.py` -- `upsert_twin_embeddings()`/`query_similar()`: each
+      twin's three domain embeddings stored in chromadb via `PersistentClient` at
+      `data/processed/chroma_db/` (gitignored, matches the doc's Section 9 "Digital Twin
+      Layer | Storage | Versioned feature store / vector store" line), one collection per
+      domain since EMR/genomic/wearable have different dimensionality and a chromadb
+      collection expects uniform dims. Entries keyed by `embedding_id()`, so
+      re-upserting a twin version is idempotent
+- [x] `src/fusion_layer/reasoning.py` -- `generate_hypothesis()`: calls the real Claude API
+      (`anthropic` SDK, `ANTHROPIC_API_KEY` read from `.env` via `get_anthropic_client()`,
+      never hardcoded -- see Known Issues for a near-miss on this). Output forced into
+      `HYPOTHESIS_JSON_SCHEMA` (`subgroup_trait`, `supporting_evidence`, `confidence`,
+      `source_embedding_ids`) via Claude's tool-use API with `tool_choice` pinned to a single
+      `record_hypothesis` tool, matching the doc's "Structured output enforcement" component.
+      The prompt supplies a whitelist of candidate `source_embedding_ids` (the cluster's real
+      chromadb entries) and `generate_hypothesis()` rejects (raises `ValueError`) any response
+      citing an ID outside that whitelist -- a hallucinated ID would silently break the doc's
+      "Traceability layer" guarantee ("Links every generated hypothesis back to the specific
+      embedding evidence that produced it"), so it's enforced in code, not just prompted for.
+      `_call_claude()` wraps the actual API call in `tenacity`-based retry with exponential
+      backoff, retrying only transient failures (`APIConnectionError`, `APITimeoutError`,
+      `RateLimitError`, `InternalServerError`) and never authentication/validation errors,
+      which would just fail identically on every retry
+- [x] `src/fusion_layer/models.py` -- `Hypothesis` SQLAlchemy model: `subgroup_trait`,
+      `supporting_evidence` (JSON list), `confidence`, `source_embedding_ids` (JSON list) --
+      `store_hypothesis()` re-validates against `HYPOTHESIS_JSON_SCHEMA` defensively before
+      inserting, rather than trusting every caller already validated its input
+- [x] `src/fusion_layer/pipeline.py` -- `run_fusion_layer_for_cohort()` orchestrates all of the
+      above for a cohort: cluster twins, upsert every member's embeddings into chromadb,
+      format each cluster, generate + store one hypothesis per cluster
+- [x] `tests/test_fusion_layer.py` (12 tests) -- formatting labels every domain and never
+      contains raw embedding values; clustering groups synthetically-separated patients
+      correctly and caps `n_clusters`; chromadb upsert/query round-trips; `generate_hypothesis()`
+      returns schema-valid JSON from a **mocked** Claude client (no live key needed to run the
+      suite) and rejects both schema violations and hallucinated `source_embedding_ids`;
+      `_call_claude()`'s retry logic verified directly (retries transient errors, does not retry
+      `AuthenticationError`); every stored hypothesis has at least one traceable
+      `source_embedding_id`, checked both right after storage and after a fresh query
+- [x] Verified live against the real API (not just the mocked test suite): one direct
+      `generate_hypothesis()` call, then a full `run_fusion_layer_for_cohort()` run against the
+      5 real digital twins in `data/processed/twin.db` (Phase 4's output) -- 2 clusters,
+      2 hypotheses stored, all 15 domain embeddings (5 patients x 3 domains) upserted into
+      chromadb, every hypothesis's `source_embedding_ids` traced back to real chromadb entries
+      (9 refs on one hypothesis, 6 on the other)
+- [x] Found and fixed a real near-miss before starting this phase: `.env.example` (the
+      template file meant to be committed to git) had been locally modified, uncommitted, to
+      contain what looked like a real `ANTHROPIC_API_KEY` value, not a placeholder -- the
+      committed version and the actual `.env` (gitignored) were both still empty/correct. Flagged
+      it rather than continuing; the user moved the key to `.env` and cleared `.env.example`
+      before this phase's work resumed. No leaked key ever reached git history
+
 ## Test Status
 
 Verified in both environments:
@@ -311,6 +378,26 @@ test run rather than across separate test files.
 Also ran `orchestrate_twins_for_cohort()` outside pytest, for all 5 patients against the project's
 real `data/processed/twin.db` -- see Phase 4 completed notes above for the result.
 
+Local venv, full suite including the new fusion layer tests (2026-09-01):
+```
+65 passed, 1 warning in 148.40s (0:02:28)
+```
+`tests/test_fusion_layer.py` (12 tests) -- PASSED. No live `ANTHROPIC_API_KEY` needed to run the
+suite -- `generate_hypothesis()` is exercised against a mocked `anthropic.Anthropic` client
+throughout.
+
+Docker (`docker compose build` then `docker compose run --rm app pytest -q`, 2026-09-01). No new
+system dependencies (`scikit-learn`/`tenacity`/`jsonschema` are pure-Python, picked up by the
+existing `pip install -r requirements.txt` step):
+```
+65 passed in 308.46s (0:05:08)
+```
+All 65 tests, across all seven test files, pass in both environments.
+
+Also verified live against the real Claude API (outside pytest, `ANTHROPIC_API_KEY` from `.env`):
+one direct `generate_hypothesis()` call, then `run_fusion_layer_for_cohort()` for all 5 real
+digital twins -- see Phase 5 completed notes above.
+
 ## Known Issues / Blockers
 
 - The EMR, wearable, and genomics source datasets have **disjoint patient ID spaces** (Synthea
@@ -348,8 +435,19 @@ real `data/processed/twin.db` -- see Phase 4 completed notes above for the resul
   (Chief Complaint / HPI / Assessment and Plan). The C-CDA merge is still wired in and adds some
   value/diversity but is largely redundant with those; could be dropped later to cut pipeline
   runtime if it matters.
-- No pipeline logic yet for `src/fusion_layer/`, `src/governance/` (still empty packages).
-- `chromadb` is installed but not yet wired into any code path.
+- No pipeline logic yet for `src/governance/` (still an empty package) -- de-identification
+  already happens inline in `src/emr_pipeline/deidentify.py` (Phase 1), but there's no
+  cross-cutting audit-logging/institutional-boundary layer yet, per the doc's Section 7
+  governance requirements.
+- The 2 hypotheses currently stored in `data/processed/twin.db`'s `hypotheses` table were
+  generated from that same database's 5 digital twins, which (see the ID-space issue
+  above) are an arbitrary positional pairing across three unrelated datasets, not real linked
+  patients -- so these specific hypotheses are a demonstration of the mechanism, not a claim
+  about any real cross-modal pattern. Regenerate once/if real linked patient data exists.
+- The `.env.example` near-miss (see Phase 5 completed notes above) is resolved for this repo,
+  but worth restating: never edit `.env.example` with a real value, even temporarily -- put
+  real secrets only in `.env` (gitignored). If the key that appeared there was ever real and
+  used elsewhere, consider rotating it in the Anthropic console regardless.
 - The "ouch meter" activation score is trained against a heuristic proxy target (see Phase 2
   completed notes above), not real pain/symptom self-reports -- there aren't any in this dataset.
   Treat the score as illustrative of the architecture, not a validated pain measure.
@@ -366,4 +464,11 @@ real `data/processed/twin.db` -- see Phase 4 completed notes above for the resul
 - A real cross-domain patient identity mapping, if/when one becomes available -- the current
   positional pairing (see Known Issues) is a demo convenience, not something to build Phase 5
   reasoning claims on top of as if it were real linked patient data
-- Phase 5: Generative Semantic Fusion Layer (Anthropic API, structured/schema-constrained output)
+- `src/governance/`: cross-cutting audit logging and institutional-boundary enforcement (doc
+  Section 7) -- still an empty package; de-identification itself already exists (Phase 1) but
+  isn't yet paired with an audit trail of who/what touched de-identified data downstream
+- Add `ANTHROPIC_API_KEY` (and any Docker-specific env wiring) to `docker-compose.yml`/`.env`
+  handling if the fusion layer needs to run inside Docker against the live API -- the test
+  suite doesn't need it (mocked), but a real Docker-based demo run would
+- Wire `src/fusion_layer/` into `api`/`app` so hypotheses can be triggered/viewed through the
+  actual application rather than only via direct Python calls

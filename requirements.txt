@@ -25,6 +25,9 @@ gseapy
 
 # Generative semantic fusion layer (Section 5)
 anthropic
+scikit-learn
+tenacity
+jsonschema
 
 # Config
 python-dotenv
