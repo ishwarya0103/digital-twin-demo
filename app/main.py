@@ -11,7 +11,19 @@ import os
 import requests
 import streamlit as st
 
-API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
+
+def _resolve_api_base_url() -> str:
+    """API_BASE_URL is a full URL locally and in docker-compose.yml (e.g.
+    "http://app:8000"). On Render, the equivalent env var is instead set via a
+    `fromService`/`property: hostport` reference (render.yaml), which returns a bare
+    "host:port" with no scheme -- add one so both conventions work unchanged."""
+    value = os.environ.get("API_BASE_URL", "http://localhost:8000")
+    if not value.startswith(("http://", "https://")):
+        value = f"http://{value}"
+    return value
+
+
+API_BASE_URL = _resolve_api_base_url()
 
 st.set_page_config(page_title="Digital Twin Demo", layout="wide")
 st.title("Digital Twin Demo")

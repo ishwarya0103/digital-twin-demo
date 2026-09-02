@@ -1,0 +1,38 @@
+services:
+  # FastAPI backend (api/) -- read-only access to the digital twin store and the fusion
+  # layer's generated hypotheses. Same image and build as docker-compose.yml's `app`
+  # service; only the start command differs from local Docker (uses Render's injected
+  # $PORT instead of the hardcoded 8000 docker-compose.yml uses).
+  - type: web
+    name: digital-twin-api
+    runtime: docker
+    dockerfilePath: ./docker/Dockerfile
+    dockerContext: .
+    dockerCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      # Matches docker-compose.yml's DATABASE_URL=${DATABASE_URL:-} for the `app` service --
+      # optional; unset/blank falls back to the baked-in SQLite demo database
+      # (src/db/session.py), same as locally. Not required at Blueprint creation.
+      - key: DATABASE_URL
+        sync: false
+
+  # Streamlit demo UI (app/) -- same image/build as docker-compose.yml's `streamlit`
+  # service. Reaches the API over Render's private network via API_BASE_URL, set below
+  # through fromService rather than hardcoded to localhost -- matches docker-compose.yml's
+  # own API_BASE_URL=http://app:8000 (Docker's internal DNS), just resolved to Render's
+  # internal hostname:port instead. app/main.py adds the "http://" scheme itself, since
+  # fromService's hostport property returns a bare "host:port" with none.
+  - type: web
+    name: digital-twin-streamlit
+    runtime: docker
+    dockerfilePath: ./docker/Dockerfile
+    dockerContext: .
+    dockerCommand: streamlit run app/main.py --server.address=0.0.0.0 --server.port=$PORT
+    healthCheckPath: /_stcore/health
+    envVars:
+      - key: API_BASE_URL
+        fromService:
+          type: web
+          name: digital-twin-api
+          property: hostport

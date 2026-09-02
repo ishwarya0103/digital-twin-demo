@@ -2,11 +2,11 @@
 
 ## Current Phase
 
-Phase 10 -- Deployment: bake in the pre-populated demo database
+Phase 11 -- Deployment: Render Blueprint (render.yaml)
 
 ## Status
 
-Complete -- all 8 original phases plus both post-review refinements complete
+Complete -- all 8 original phases plus all three post-review refinements complete
 
 | Phase | Name | Status |
 |---|---|---|
@@ -21,6 +21,7 @@ Complete -- all 8 original phases plus both post-review refinements complete
 | 8 | Final Review | Complete |
 | 9 | Clinical-language hypotheses (refinement) | Complete |
 | 10 | Deployment: bake in the demo database (refinement) | Complete |
+| 11 | Deployment: Render Blueprint (refinement) | Complete |
 
 ## Completed
 
@@ -580,6 +581,51 @@ Phase 1-5 pipelines by hand
       `.dockerignore`, a separate mechanism, changed) -- this change affects what goes into Docker
       image layers, not what git tracks
 
+**Phase 11 -- Deployment: Render Blueprint (`render.yaml`)**: two web services from this repo --
+the FastAPI backend and the Streamlit UI -- both built from the existing `docker/Dockerfile`,
+mirroring `docker-compose.yml`'s local two-service setup but for Render's hosted platform
+- [x] `render.yaml` (new, project root) -- `digital-twin-api` and `digital-twin-streamlit`, both
+      `runtime: docker`, `dockerfilePath: ./docker/Dockerfile`, `dockerContext: .` (same image
+      both services build from, just like the two docker-compose.yml services). Verified the
+      current Render Blueprint YAML schema directly against Render's docs before writing this
+      (their spec has changed over time -- e.g. `runtime` replacing a deprecated `env` field)
+      rather than trust unverified memory of it
+- [x] Each service's `dockerCommand` overrides the Dockerfile's default `CMD` with the same
+      per-service start command `docker-compose.yml` uses (`uvicorn api.main:app`/
+      `streamlit run app/main.py`), except binding to Render's injected `$PORT` instead of the
+      hardcoded 8000/8501 docker-compose.yml uses -- confirmed via Render's docs that a web
+      service must listen on whatever `$PORT` it's given (default 10000), not a fixed port
+- [x] `healthCheckPath: /health` (API, already existed) / `/_stcore/health` (Streamlit's own
+      built-in liveness endpoint, confirmed via Render/Streamlit docs rather than assumed)
+- [x] The Streamlit service reaches the API over Render's private network via `API_BASE_URL`,
+      set through `fromService: {name: digital-twin-api, property: hostport}` -- Render's
+      mechanism for injecting one service's internal `host:port` into another's environment,
+      not `localhost` and not a value invented/hardcoded here
+- [x] Found and fixed a real interoperability gap while verifying this: Render's `hostport`
+      property returns a bare `host:port` with no URL scheme (confirmed via Render community
+      docs/examples), but `app/main.py`'s `API_BASE_URL` was only ever exercised locally as a
+      full URL (`http://app:8000` from docker-compose.yml, or its own `http://localhost:8000`
+      default) -- unchanged, the app would have built a malformed URL like
+      `digital-twin-api-xyz:10000/patients` (no scheme) against Render's value and every
+      request would fail. Added `_resolve_api_base_url()`, which prepends `http://` only when
+      the env var doesn't already start with `http://`/`https://` -- backward-compatible with
+      both existing conventions (bare local default, full docker-compose.yml URL), and now also
+      correct for Render's bare-hostport convention
+- [x] Verified the fix for real, not just by reasoning about it: ran the actual Streamlit app
+      locally with `API_BASE_URL="localhost:8000"` (bare, no scheme -- the exact shape Render's
+      `hostport` produces) against a real running API container, and confirmed in a browser that
+      it resolves the URL correctly and renders real patient/hypothesis data, not an error
+- [x] No `plan`/`region` specified for either service -- left for Render's own defaults /
+      dashboard configuration rather than guessing at a pricing tier the user didn't ask for
+- [x] Deliberately did not add a Render Postgres resource, a persistent disk, or an
+      `ANTHROPIC_API_KEY` env var -- none of those were part of what was asked (two services
+      matching docker-compose.yml's existing wiring), and `docker-compose.yml` itself doesn't
+      pass `ANTHROPIC_API_KEY` to either service today (the API's endpoints are all read-only,
+      no live Claude calls at request time) or configure persistent storage beyond its local bind
+      mount, which doesn't have a Render equivalent in scope here. `DATABASE_URL` is included
+      (optional, `sync: false`) only because docker-compose.yml's `app` service already exposes
+      that exact same hook
+
 ## Test Status
 
 Verified in both environments:
@@ -795,6 +841,15 @@ HTTP round-trip against a container started with no volume mount at all
 an empty baked-in database with host data). `docker compose up`'s volume-mounted local-dev
 behavior reconfirmed unchanged alongside it.
 
+**Phase 11 (2026-09-02)** -- `render.yaml` isn't Python, and `app/main.py` has no pytest coverage
+(it's a Streamlit script, not currently under test), so no new automated tests either; verified
+by hand instead (see Phase 11 completed notes above): the YAML parses and matches Render's
+documented Blueprint schema field-for-field, and -- the part that actually mattered functionally
+-- ran the real Streamlit app locally with `API_BASE_URL` set to a bare `"localhost:8000"` (no
+scheme, the exact shape Render's `fromService`/`hostport` produces) against a real running API
+container, then loaded it in a browser and confirmed it rendered real patient/hypothesis data
+rather than failing on a malformed URL.
+
 ## Known Issues / Blockers
 
 - The EMR, wearable, and genomics source datasets have **disjoint patient ID spaces** (Synthea
@@ -927,4 +982,13 @@ behavior reconfirmed unchanged alongside it.
 - The database baked into the image (Phase 10) is a point-in-time snapshot, not a live sync --
   if the demo data is ever regenerated (real 1000 Genomes VCF, a real patient-identity mapping,
   etc.), the image needs a fresh `docker compose build` to pick up the new
-  `data/processed/twin.db`; nothing currently automates that refresh.
+  `data/processed/twin.db`; nothing currently automates that refresh. On Render (Phase 11) the
+  same applies: a fresh deploy is needed to pick up a rebuilt image with newer baked-in data,
+  and Render's own filesystem for each service is ephemeral by default (no disk configured), so
+  anything written after the container starts (a real "regenerate hypotheses" trigger, if one
+  gets built per an earlier Next Steps item) wouldn't persist across restarts/redeploys there
+  either without adding a Render persistent disk -- not configured, since it wasn't asked for.
+- `render.yaml` (Phase 11) has only been verified locally (YAML validity against Render's
+  documented schema, plus the actual Streamlit-app/bare-hostport interaction proven end-to-end
+  against a local API) -- not yet deployed to a real Render account. Worth an actual first
+  deploy to confirm the Blueprint is accepted as-is and both services come up healthy together.
