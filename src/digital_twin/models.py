@@ -36,9 +36,21 @@ class DigitalTwin(Base):
     # a plain "embedding" column would lose that labeling.
     emr_pipeline_version = Column(String, nullable=False)
     emr_embedding = Column(JSON, nullable=False)  # list[float] -- Stage 5 clinical state vector
+    # Labeled clinical summary alongside the opaque embedding (src/emr_pipeline/summary.py's
+    # summarize_clinical_events() output: {"diagnoses", "medications", "symptoms"}, each a
+    # list[str]) -- already-extracted, already-structured Stage 3/4 output, not raw note text.
+    # Nullable so a twin assembled before this column existed still loads; every twin assembled
+    # since always has one (assembly.py requires it).
+    emr_summary = Column(JSON, nullable=True)
 
     genomic_pipeline_version = Column(String, nullable=False)
     genomic_embedding = Column(JSON, nullable=False)  # list[float] -- genomic pathway profile
+    # src/genomics_pipeline/summary.py's summarize_pathway_profile() output:
+    # {"pathway_scores": {name: score}, "ancestry_pcs": list[float]}.
+    genomic_summary = Column(JSON, nullable=True)
 
     wearable_pipeline_version = Column(String, nullable=False)
     wearable_embedding = Column(JSON, nullable=False)  # list[float] -- wearable physiological profile
+    # src/wearable_pipeline/summary.py's summarize_wearable_profile() output:
+    # {"mean_activation_score", "max_activation_score", "num_windows", "interpretation"}.
+    wearable_summary = Column(JSON, nullable=True)

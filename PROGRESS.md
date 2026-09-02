@@ -2,11 +2,11 @@
 
 ## Current Phase
 
-Phase 8 -- Final Review
+Phase 9 -- Clinical-language hypotheses (post-review refinement)
 
 ## Status
 
-Complete -- all 8 phases complete
+Complete -- all 8 original phases plus this refinement complete
 
 | Phase | Name | Status |
 |---|---|---|
@@ -19,6 +19,7 @@ Complete -- all 8 phases complete
 | 6 | Governance Layer | Complete |
 | 7 | API + Demo UI | Complete |
 | 8 | Final Review | Complete |
+| 9 | Clinical-language hypotheses (refinement) | Complete |
 
 ## Completed
 
@@ -453,6 +454,100 @@ request; both only ever serve/display already-computed, already-stored data
       Complete) -- the detailed per-phase logs below are unchanged, this is a quick-glance summary
       on top of them, not a replacement
 
+**Phase 9 -- Clinical-language hypotheses (post-review refinement)**: the Hypotheses tab was
+generating claims from raw embedding statistics (L2 norm, mean, std) instead of the clinical facts
+those embeddings represent. Architecture doc Section 4.2's own example hypothesis reads
+"a subgroup characterized by specific autonomic activation patterns, poor response to a class of
+analgesics, and enrichment in particular inflammatory pathways" -- clinical language, not vector
+math. Exposed each Layer 1 pipeline's already-extracted labeled data and threaded it through
+Layer 2 storage into Layer 3's prompt, the API, and the UI
+- [x] `src/emr_pipeline/summary.py` (new) -- `summarize_clinical_events()`: groups the Stage 3/4
+      timeline's `ClinicalEvent`s into `{"diagnoses", "medications", "symptoms"}`, deduped
+      case-insensitively. Diagnosis/medication events only count when `source == "structured"`
+      (straight FHIR text) -- note-derived matches use a "first word over 4 characters" heuristic
+      that occasionally produces a generic non-clinical word (e.g. "index" out of "Body mass index
+      30+ - obesity (finding)", "history" out of "history of coronary artery bypass grafting"),
+      harmless diluted into a 768-dim embedding mean-pool but wrong to surface as a diagnosis in a
+      human/LLM-facing summary. Symptom matches are exempt (`SYMPTOM_LEXICON` is a small, always-
+      clean curated vocabulary, not derived via that heuristic). Deliberately excludes lab events
+      entirely: `Observation` text bakes in the specific measured value per draw, so distinct lab
+      text doesn't compress into a short label list the way diagnosis/medication names do -- a
+      patient with routine labs produced 190+ near-duplicate entries under any naive approach.
+      `run_emr_pipeline_for_patient()`'s returned dict gained a `"clinical_summary"` key
+- [x] `src/genomics_pipeline/summary.py` (new) -- `summarize_pathway_profile()`: labels the
+      `GenomicPathwayProfile.embedding`'s pathway dimensions by their own `pathway_names` into
+      `{"pathway_scores": {name: score}, "ancestry_pcs": [...]}` -- the same values, just named
+      instead of left as anonymous vector positions
+- [x] `src/wearable_pipeline/summary.py` (new) -- `summarize_wearable_profile()`: the actual mean/
+      max activation score across a patient's windows plus a plain-language interpretation ("low"/
+      "moderate"/"high autonomic/stress activation") against fixed thresholds -- explicitly not a
+      validated severity scale, same caveat as the "ouch meter" itself (Phase 2 Known Issues)
+- [x] `src/digital_twin/models.py` -- `DigitalTwin` gained `emr_summary`/`genomic_summary`/
+      `wearable_summary` JSON columns (nullable, for any pre-existing row; every twin assembled
+      going forward always has one -- `assembly.py` requires all three as arguments, not optional).
+      `src/digital_twin/assembly.py`/`orchestrate.py`/`retrieval.py` updated to require, compute,
+      and return them alongside each domain's embedding
+- [x] `src/fusion_layer/formatting.py` -- rewrote `format_patient_summary()`/
+      `format_cluster_summary()` to build prompt text from each domain's labeled summary instead
+      of embedding statistics: EMR lines list diagnoses/medications/symptoms; genomic lines list
+      elevated pathway names with scores; wearable lines state the activation interpretation. The
+      cluster-level aggregate (previously a mean-L2-norm-across-cluster stat) now reports what's
+      actually *shared* across every member per domain (set intersection of diagnoses/medications/
+      symptoms and of elevated pathway names, plus the range of wearable activation scores) --
+      matching what a "subgroup characterized by..." hypothesis needs to point to
+- [x] `src/fusion_layer/reasoning.py` -- updated `_SYSTEM_PROMPT`/`_build_prompt()` to describe the
+      input as a clinical/genomic/wearable summary (not "embedding statistics") and explicitly
+      instruct clinical language over vector statistics, with the architecture doc's own example
+      phrasing folded into the prompt
+- [x] `api/schemas.py`/`api/main.py` -- `DomainEmbedding`/`DomainResponse` gained a `summary: dict`
+      field, populated from the twin's new summary columns (defaulting to `{}` for the nullable-
+      column edge case)
+- [x] `app/main.py` -- the Digital Twin tab now shows each domain's plain-language summary
+      (diagnoses/medications/symptoms; elevated pathways; activation interpretation) as the primary
+      view, with the raw embedding vector/line chart moved into a collapsed "Technical detail (raw
+      embedding vector)" expander per domain
+- [x] Migrated the real `data/processed/twin.db`: this project has no migration tool (no Alembic),
+      and `Base.metadata.create_all()` only creates missing tables, it doesn't `ALTER` existing
+      ones -- so the pre-existing `digital_twins` table needed the new columns added some other
+      way. Dropped and recreated `digital_twins`/`hypotheses` (the existing 5 twins/2 hypotheses
+      were already documented as an arbitrary-ID-mapping mechanism demonstration, not real
+      clinical data -- see Known Issues -- so nothing of substance was lost) and re-ran
+      `orchestrate_twins_for_cohort()` with the same positional ID mapping used since Phase 4
+- [x] Re-ran hypothesis generation for the full cohort. Hit two real, one-off Claude tool-call
+      formatting misses along the way -- once `supporting_evidence` came back as a single string
+      instead of an array, once `source_embedding_ids` was missing entirely -- both correctly
+      rejected by the existing strict schema validation (nothing invalid was ever stored) and both
+      succeeded on a plain retry, confirming these were non-deterministic model-output variance,
+      not a problem with the new prompt content. Final result, both hypotheses stored in the real
+      database: "Psychosocial-stress-associated subgroup with chronic pain/inflammatory
+      comorbidity and moderate autonomic activation, absent a unifying genomic pathway signal"
+      (patient-1/2/4) and "Reproductive-age women on combined oral contraceptive ... therapy with
+      concurrent psychosocial stress, oral health disease burden, and pain symptomatology, but
+      without corresponding elevation in autonomic/stress activation or genomic pathway signal"
+      (patient-3/5) -- confirmed zero vector-math markers (`L2_norm`, `mean=`, `std=`, `dim=`) in
+      either, by direct string search
+- [x] Verified end-to-end for real, not just via pytest: rebuilt both Docker services, confirmed
+      `/patient/{id}/hypotheses` returns the new clinical-language content over HTTP, then drove
+      the actual Streamlit UI in a browser -- the EMR/Genomic/Wearable panels show plain-language
+      summaries by default with the raw vector chart correctly tucked into a collapsed expander,
+      and the Hypotheses tab renders the new clinically-worded hypothesis with no vector-math
+      language visible anywhere. Stopped both containers afterward
+- [x] `tests/test_emr_pipeline.py`/`test_genomics_pipeline.py`/`test_wearable_pipeline.py` --
+      added unit tests for each new `summarize_*()` function (grouping/dedup/structured-only
+      filtering for EMR; name-to-score labeling for genomics; mean/max/interpretation-threshold
+      correctness for wearable), plus an end-to-end assertion that real pipeline output actually
+      includes a non-trivial labeled summary
+- [x] `tests/test_fusion_layer.py` -- rewrote the formatting tests to assert real clinical terms
+      (medication/diagnosis/pathway names, activation interpretation) appear in the formatted text
+      and that vector-math markers (`L2_norm`, `mean=`, `std=`, `dim=`) never do; added a test that
+      inspects the actual mocked `client.messages.create` call arguments to confirm the labeled
+      clinical summary -- not vector statistics -- is what's really sent to the LLM
+- [x] Updated every other call site broken by `assemble_and_store_twin()`'s three new required
+      parameters (`tests/test_digital_twin.py`, `tests/test_digital_twin_orchestrate.py`,
+      `tests/test_governance.py`, `tests/test_api.py`) to supply them, and strengthened several of
+      those tests' assertions to also cover the new summary fields rather than just adding
+      placeholder values to keep them passing
+
 ## Test Status
 
 Verified in both environments:
@@ -638,6 +733,28 @@ Docker (`docker compose build` then `docker compose run --rm app pytest -q`):
 
 No failing tests found -- nothing needed fixing.
 
+**Phase 9 -- clinical-language hypotheses (2026-09-02)**, 105 tests across all nine test files (18
+new: 3 EMR summary tests, 5 genomics summary tests (parametrized), 8 wearable summary tests, 1
+digital twin summary test, plus fusion_layer's formatting tests rewritten/expanded):
+
+Local venv:
+```
+105 passed, 1 warning in 224.89s (0:03:44)
+```
+
+Docker (`docker compose build` then `docker compose run --rm app pytest -q`), no new dependencies:
+```
+105 passed in 736.99s (0:12:16)
+```
+
+All 105 tests, across all nine test files, pass in both environments.
+
+Also verified for real, outside pytest: dropped and recreated `digital_twins`/`hypotheses` in the
+real `data/processed/twin.db` (schema change, no migration tool -- see Phase 9 completed notes),
+regenerated all 5 twins and both hypotheses, confirmed zero vector-math markers in the stored
+hypothesis text by direct string search, then rebuilt both Docker services and confirmed the new
+clinical-language output over both the API (`curl`) and the actual Streamlit UI in a browser.
+
 ## Known Issues / Blockers
 
 - The EMR, wearable, and genomics source datasets have **disjoint patient ID spaces** (Synthea
@@ -704,6 +821,23 @@ No failing tests found -- nothing needed fixing.
 - Event-window segmentation falls back to session start/end when a session has no tags.csv
   entries (most "Final" sessions do); only some "Midterm 1"/"Midterm 2" sessions have real
   button-press-tagged events.
+- No migration tool (no Alembic) -- adding the Phase 9 `emr_summary`/`genomic_summary`/
+  `wearable_summary` columns to `DigitalTwin` required dropping and recreating the real
+  `digital_twins`/`hypotheses` tables by hand (see Phase 9 completed notes above), since
+  `Base.metadata.create_all()` only creates missing tables, never `ALTER`s existing ones. Any
+  future schema change to an already-populated table will hit the same gap; a real migration
+  tool is worth adopting before this demo's database ever holds data worth preserving across a
+  schema change.
+- Claude's tool-use output can occasionally fail schema validation even under a forced
+  `tool_choice` -- observed twice while regenerating Phase 9's hypotheses (`supporting_evidence`
+  returned as a single string instead of an array; `source_embedding_ids` missing entirely from
+  an otherwise well-formed response). Both were correctly rejected by the existing
+  `jsonschema.validate()` check (nothing invalid was ever stored) and both succeeded on a plain
+  retry -- non-deterministic model output variance, not a schema or prompt bug. There's no
+  automatic retry-on-validation-failure yet (`_call_claude()`'s retry/backoff only covers
+  transient network/rate-limit errors, deliberately -- see reasoning.py's docstring); a caller
+  hitting this today needs to notice the `jsonschema.ValidationError` and call
+  `generate_hypothesis()`/`generate_and_store_hypothesis()` again by hand, same as was done here.
 
 ## Next Steps
 
@@ -738,3 +872,15 @@ No failing tests found -- nothing needed fixing.
   worth flagging explicitly before this is ever reachable from anywhere other than localhost/a
   trusted Docker network, since it currently serves patient-level data (synthetic, but still
   structured the way real patient data would be) to any caller that can reach port 8000.
+- Adopt a real migration tool (e.g. Alembic) before this database ever holds data worth
+  preserving across a schema change -- Phase 9 had to drop and recreate two tables by hand (see
+  Known Issues) because none exists yet.
+- Consider adding retry-on-schema-violation to `generate_hypothesis()` (distinct from
+  `_call_claude()`'s existing transient-network retry) -- Phase 9 hit two one-off Claude tool-call
+  formatting misses that both succeeded on a plain retry (see Known Issues); an automatic bounded
+  retry specifically for `jsonschema.ValidationError` would remove the need to notice and re-run
+  by hand.
+- Consider trimming very long per-patient diagnosis/medication lists in `formatting.py` before
+  they reach the prompt (e.g. patient-1 alone has 30 diagnoses) -- not confirmed as the cause of
+  Phase 9's two formatting misses, but shorter, more focused prompts are generally cheaper and
+  less likely to strain structured output regardless.

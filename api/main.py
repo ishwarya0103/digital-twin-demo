@@ -53,9 +53,19 @@ def get_full_twin(patient_id: str, db: Session = Depends(get_db)):
         patient_id=twin.patient_id,
         version=twin.version,
         created_at=twin.created_at,
-        emr=DomainEmbedding(pipeline_version=twin.emr_pipeline_version, embedding=twin.emr_embedding),
-        genomic=DomainEmbedding(pipeline_version=twin.genomic_pipeline_version, embedding=twin.genomic_embedding),
-        wearable=DomainEmbedding(pipeline_version=twin.wearable_pipeline_version, embedding=twin.wearable_embedding),
+        emr=DomainEmbedding(
+            pipeline_version=twin.emr_pipeline_version, embedding=twin.emr_embedding, summary=twin.emr_summary or {}
+        ),
+        genomic=DomainEmbedding(
+            pipeline_version=twin.genomic_pipeline_version,
+            embedding=twin.genomic_embedding,
+            summary=twin.genomic_summary or {},
+        ),
+        wearable=DomainEmbedding(
+            pipeline_version=twin.wearable_pipeline_version,
+            embedding=twin.wearable_embedding,
+            summary=twin.wearable_summary or {},
+        ),
     )
 
 

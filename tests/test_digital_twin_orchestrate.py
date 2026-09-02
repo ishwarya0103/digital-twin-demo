@@ -52,12 +52,18 @@ def test_orchestrate_twin_for_patient_end_to_end(db):
     assert twin.emr_pipeline_version == EMR_PIPELINE_VERSION
     assert len(twin.emr_embedding) == EMR_EMBEDDING_DIM
     assert any(v != 0.0 for v in twin.emr_embedding)  # this patient actually has clinical events
+    # Labeled clinical summary, not just the opaque vector -- this patient has real diagnoses.
+    assert twin.emr_summary["diagnoses"] or twin.emr_summary["medications"]
+    assert set(twin.emr_summary.keys()) == {"diagnoses", "medications", "symptoms"}
 
     assert twin.wearable_pipeline_version == WEARABLE_PIPELINE_VERSION
     assert len(twin.wearable_embedding) == WEARABLE_EMBEDDING_DIM
+    assert twin.wearable_summary["interpretation"]
+    assert twin.wearable_summary["num_windows"] > 0
 
     assert twin.genomic_pipeline_version == GENOMICS_PIPELINE_VERSION
     assert len(twin.genomic_embedding) > 0
+    assert twin.genomic_summary["pathway_scores"]  # named, not just anonymous vector positions
 
     # Round-trip through storage/retrieval, not just the in-memory object returned above.
     fetched = get_twin(db, "patient-1")
@@ -65,3 +71,6 @@ def test_orchestrate_twin_for_patient_end_to_end(db):
     assert fetched.emr_embedding == twin.emr_embedding
     assert fetched.wearable_embedding == twin.wearable_embedding
     assert fetched.genomic_embedding == twin.genomic_embedding
+    assert fetched.emr_summary == twin.emr_summary
+    assert fetched.wearable_summary == twin.wearable_summary
+    assert fetched.genomic_summary == twin.genomic_summary

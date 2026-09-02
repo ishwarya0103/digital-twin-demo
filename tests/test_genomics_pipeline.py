@@ -11,6 +11,7 @@ from src.genomics_pipeline.gwas import (
 )
 from src.genomics_pipeline.pathway_aggregation import run_pathway_enrichment
 from src.genomics_pipeline.pipeline import run_genomics_pipeline
+from src.genomics_pipeline.summary import summarize_pathway_profile
 from src.genomics_pipeline.vcf_loader import discover_vcf, load_samples
 
 RAW_DIR = "data/raw/genomics"
@@ -88,3 +89,24 @@ def test_traceability_fields_present(profiles, index):
     profile = profiles[index]
     assert profile.patient_id
     assert profile.pipeline_version
+
+
+# ---------------------------------------------------------------------------
+# summary.py -- named pathway scores, not just an unlabeled vector
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("index", range(5))
+def test_summarize_pathway_profile_labels_every_pathway_by_name(profiles, index):
+    profile = profiles[index]
+    summary = summarize_pathway_profile(profile)
+
+    assert set(summary.keys()) == {"pathway_scores", "ancestry_pcs"}
+    # Every one of the profile's own named pathways appears as a key -- not left as an
+    # anonymous vector position.
+    assert set(summary["pathway_scores"].keys()) == set(profile.pathway_names)
+    # The labeled scores are the same values as the embedding's own pathway dimensions, just
+    # named instead of positional.
+    for i, name in enumerate(profile.pathway_names):
+        assert summary["pathway_scores"][name] == pytest.approx(float(profile.embedding[i]))
+    assert len(summary["ancestry_pcs"]) == profile.num_pcs

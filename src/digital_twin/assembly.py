@@ -30,23 +30,36 @@ def assemble_and_store_twin(
     patient_id: str,
     emr_embedding: np.ndarray,
     emr_pipeline_version: str,
+    emr_summary: dict,
     genomic_embedding: np.ndarray,
     genomic_pipeline_version: str,
+    genomic_summary: dict,
     wearable_embedding: np.ndarray,
     wearable_pipeline_version: str,
+    wearable_summary: dict,
 ) -> DigitalTwin:
     """Writes a new versioned digital twin row for `patient_id`. Never overwrites or deletes
     a previous version for that patient -- `version` is always one more than that patient's
-    current highest version (1 for a first twin)."""
+    current highest version (1 for a first twin).
+
+    Each domain's `*_summary` is that domain's own labeled clinical summary (see
+    src/{emr,genomics,wearable}_pipeline/summary.py) -- required, not optional, so every twin
+    assembled going forward always has one alongside its embedding; the fusion layer
+    (formatting.py) reads these, not the embeddings, to build hypothesis prompts in clinical
+    language rather than vector statistics.
+    """
     twin = DigitalTwin(
         patient_id=patient_id,
         version=_next_version(db, patient_id),
         emr_pipeline_version=emr_pipeline_version,
         emr_embedding=_as_list(emr_embedding),
+        emr_summary=emr_summary,
         genomic_pipeline_version=genomic_pipeline_version,
         genomic_embedding=_as_list(genomic_embedding),
+        genomic_summary=genomic_summary,
         wearable_pipeline_version=wearable_pipeline_version,
         wearable_embedding=_as_list(wearable_embedding),
+        wearable_summary=wearable_summary,
     )
     db.add(twin)
     db.commit()

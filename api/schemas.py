@@ -11,6 +11,7 @@ from pydantic import BaseModel
 class DomainEmbedding(BaseModel):
     pipeline_version: str
     embedding: list[float]
+    summary: dict
 
 
 class FullTwinResponse(BaseModel):
@@ -37,6 +38,7 @@ class DomainResponse(BaseModel):
     domain: str
     pipeline_version: str
     embedding: list[float]
+    summary: dict
 
 
 class HypothesisResponse(BaseModel):

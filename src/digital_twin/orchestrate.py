@@ -23,10 +23,10 @@ from src.emr_pipeline import PIPELINE_VERSION as EMR_PIPELINE_VERSION
 from src.emr_pipeline import run_emr_pipeline_for_patient
 from src.emr_pipeline.fhir_loader import discover_patient_bundles, load_patient_bundle
 from src.genomics_pipeline import PIPELINE_VERSION as GENOMICS_PIPELINE_VERSION
-from src.genomics_pipeline import run_genomics_pipeline
+from src.genomics_pipeline import run_genomics_pipeline, summarize_pathway_profile
 from src.genomics_pipeline.models import GenomicPathwayProfile
 from src.wearable_pipeline import PIPELINE_VERSION as WEARABLE_PIPELINE_VERSION
-from src.wearable_pipeline import run_wearable_pipeline
+from src.wearable_pipeline import run_wearable_pipeline, summarize_wearable_profile
 from src.wearable_pipeline.models import WearableProfile
 
 
@@ -93,10 +93,13 @@ def orchestrate_twin_for_patient(
         patient_id=patient_id,
         emr_embedding=emr_result["clinical_state_vector"],
         emr_pipeline_version=emr_result["pipeline_version"],
+        emr_summary=emr_result["clinical_summary"],
         genomic_embedding=genomic_profile.embedding,
         genomic_pipeline_version=genomic_profile.pipeline_version,
+        genomic_summary=summarize_pathway_profile(genomic_profile),
         wearable_embedding=wearable_profile.embedding,
         wearable_pipeline_version=wearable_profile.pipeline_version,
+        wearable_summary=summarize_wearable_profile(wearable_profile),
     )
 
 

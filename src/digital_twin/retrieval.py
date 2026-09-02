@@ -29,9 +29,9 @@ def get_twin(db: Session, patient_id: str, version: int | None = None) -> Digita
 
 
 def get_twin_domain(db: Session, patient_id: str, domain: str, version: int | None = None) -> dict | None:
-    """Just one domain's slice of a patient's twin -- its embedding and the pipeline_version
-    that produced it, nothing from the other two domains. `domain` is one of DOMAINS
-    ("emr", "genomic", "wearable"). None if no matching twin exists."""
+    """Just one domain's slice of a patient's twin -- its embedding, labeled clinical summary,
+    and the pipeline_version that produced them, nothing from the other two domains. `domain`
+    is one of DOMAINS ("emr", "genomic", "wearable"). None if no matching twin exists."""
     if domain not in DOMAINS:
         raise ValueError(f"Unknown domain {domain!r}, expected one of {DOMAINS}")
 
@@ -45,4 +45,5 @@ def get_twin_domain(db: Session, patient_id: str, domain: str, version: int | No
         "domain": domain,
         "pipeline_version": getattr(twin, f"{domain}_pipeline_version"),
         "embedding": getattr(twin, f"{domain}_embedding"),
+        "summary": getattr(twin, f"{domain}_summary") or {},
     }

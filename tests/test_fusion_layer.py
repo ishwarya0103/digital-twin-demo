@@ -34,18 +34,42 @@ def db():
         session.close()
 
 
-def _make_twin(db, patient_id: str, emr_offset: float, genomic_offset: float, wearable_offset: float):
+_EMPTY_EMR_SUMMARY = {"diagnoses": [], "medications": [], "symptoms": []}
+_EMPTY_GENOMIC_SUMMARY = {"pathway_scores": {}, "ancestry_pcs": []}
+_EMPTY_WEARABLE_SUMMARY = {
+    "mean_activation_score": None,
+    "max_activation_score": None,
+    "num_windows": 0,
+    "interpretation": "n/a",
+}
+
+
+def _make_twin(
+    db,
+    patient_id: str,
+    emr_offset: float,
+    genomic_offset: float,
+    wearable_offset: float,
+    emr_summary: dict | None = None,
+    genomic_summary: dict | None = None,
+    wearable_summary: dict | None = None,
+):
     """A digital twin with embeddings offset from zero by a fixed amount -- lets clustering
-    tests build two clearly-separable groups without needing real pipeline output."""
+    tests build two clearly-separable groups without needing real pipeline output. Labeled
+    clinical summaries default to empty/placeholder (irrelevant to clustering/storage tests);
+    formatting tests pass real ones explicitly."""
     return assemble_and_store_twin(
         db,
         patient_id=patient_id,
         emr_embedding=[emr_offset] * 8,
         emr_pipeline_version="emr-v0.1.0",
+        emr_summary=emr_summary or _EMPTY_EMR_SUMMARY,
         genomic_embedding=[genomic_offset] * 5,
         genomic_pipeline_version="genomics-v0.1.0",
+        genomic_summary=genomic_summary or _EMPTY_GENOMIC_SUMMARY,
         wearable_embedding=[wearable_offset] * 4,
         wearable_pipeline_version="wearable-v0.1.0",
+        wearable_summary=wearable_summary or _EMPTY_WEARABLE_SUMMARY,
     )
 
 
@@ -72,27 +96,80 @@ def _mock_client_returning(hypothesis: dict) -> MagicMock:
 # ---------------------------------------------------------------------------
 
 
-def test_format_patient_summary_labels_every_domain_no_raw_values(db):
-    twin = _make_twin(db, "patient-1", 1.0, 2.0, 3.0)
+EMR_SUMMARY_A = {
+    "diagnoses": ["Fibromyalgia", "Essential hypertension"],
+    "medications": ["Metformin"],
+    "symptoms": ["back pain"],
+}
+GENOMIC_SUMMARY_A = {
+    "pathway_scores": {"Inflammatory mediator regulation of TRP channels": 2.3, "Drug metabolism": 0.0},
+    "ancestry_pcs": [0.5, -0.1],
+}
+WEARABLE_SUMMARY_A = {
+    "mean_activation_score": 0.71,
+    "max_activation_score": 0.9,
+    "num_windows": 5,
+    "interpretation": "high autonomic/stress activation",
+}
+
+EMR_SUMMARY_B = {"diagnoses": ["Fibromyalgia"], "medications": ["Metformin", "Lisinopril"], "symptoms": []}
+GENOMIC_SUMMARY_B = {
+    "pathway_scores": {"Inflammatory mediator regulation of TRP channels": 1.1, "Drug metabolism": 0.4},
+    "ancestry_pcs": [0.4, -0.2],
+}
+WEARABLE_SUMMARY_B = {
+    "mean_activation_score": 0.60,
+    "max_activation_score": 0.8,
+    "num_windows": 4,
+    "interpretation": "moderate autonomic/stress activation",
+}
+
+# Vector-math language the old, embedding-stats-based formatting used to emit -- none of this
+# should appear anywhere once formatting.py builds text from labeled clinical summaries instead.
+_VECTOR_MATH_MARKERS = ("L2_norm", "mean=", "std=", "dim=")
+
+
+def test_format_patient_summary_reads_clinically_not_statistically(db):
+    twin = _make_twin(
+        db, "patient-1", 1.0, 2.0, 3.0, EMR_SUMMARY_A, GENOMIC_SUMMARY_A, WEARABLE_SUMMARY_A
+    )
     text = format_patient_summary(twin)
 
     for domain in ("emr", "genomic", "wearable"):
         assert domain in text
         assert embedding_id("patient-1", 1, domain) in text
-    # Structured summary statistics only -- never the embedding's raw value list.
+
+    # Actual clinical facts, not vector statistics.
+    assert "Fibromyalgia" in text
+    assert "Metformin" in text
+    assert "back pain" in text
+    assert "Inflammatory mediator regulation of TRP channels" in text
+    assert "high autonomic/stress activation" in text
+    for marker in _VECTOR_MATH_MARKERS:
+        assert marker not in text
+
+    # Never the embedding's own raw value list either.
     assert str(twin.emr_embedding) not in text
     assert str(twin.genomic_embedding) not in text
     assert str(twin.wearable_embedding) not in text
 
 
-def test_format_cluster_summary_includes_every_member(db):
-    twin_a = _make_twin(db, "patient-1", 1.0, 1.0, 1.0)
-    twin_b = _make_twin(db, "patient-2", 1.1, 1.1, 1.1)
+def test_format_cluster_summary_includes_every_member_and_shared_clinical_terms(db):
+    twin_a = _make_twin(db, "patient-1", 1.0, 1.0, 1.0, EMR_SUMMARY_A, GENOMIC_SUMMARY_A, WEARABLE_SUMMARY_A)
+    twin_b = _make_twin(db, "patient-2", 1.1, 1.1, 1.1, EMR_SUMMARY_B, GENOMIC_SUMMARY_B, WEARABLE_SUMMARY_B)
     text = format_cluster_summary([twin_a, twin_b], cluster_id=0)
 
     assert "patient-1" in text
     assert "patient-2" in text
     assert "Cluster 0" in text
+
+    # Both patients share the "Fibromyalgia" diagnosis, "Metformin", and the same elevated
+    # pathway -- the cluster-level aggregate should surface that shared clinical signal.
+    assert "Fibromyalgia" in text
+    assert "Metformin" in text
+    assert "Inflammatory mediator regulation of TRP channels" in text
+    for marker in _VECTOR_MATH_MARKERS:
+        assert marker not in text
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +235,34 @@ def test_generate_hypothesis_returns_valid_schema_matching_json(db):
     assert 0.0 <= result["confidence"] <= 1.0
     assert result["source_embedding_ids"] == candidate_ids
     client.messages.create.assert_called_once()
+
+
+def test_generate_hypothesis_sends_labeled_clinical_summary_to_the_llm_not_vector_stats(db):
+    """The whole point of formatting.py building clinical-language text: confirm that text --
+    medication/diagnosis/pathway/activation labels -- is what actually lands in the message
+    sent to Claude, not embedding statistics, by inspecting the mocked call's real arguments."""
+    twin = _make_twin(
+        db, "patient-1", 1.0, 2.0, 3.0, EMR_SUMMARY_A, GENOMIC_SUMMARY_A, WEARABLE_SUMMARY_A
+    )
+    candidate_ids = [embedding_id("patient-1", 1, "emr"), embedding_id("patient-1", 1, "genomic")]
+    hypothesis_payload = {**VALID_HYPOTHESIS, "source_embedding_ids": candidate_ids}
+    client = _mock_client_returning(hypothesis_payload)
+
+    cluster_summary_text = format_patient_summary(twin)
+    generate_hypothesis(client, cluster_summary_text, candidate_ids)
+
+    call_kwargs = client.messages.create.call_args.kwargs
+    sent_message = call_kwargs["messages"][0]["content"]
+
+    assert "Fibromyalgia" in sent_message
+    assert "Metformin" in sent_message
+    assert "Inflammatory mediator regulation of TRP channels" in sent_message
+    assert "high autonomic/stress activation" in sent_message
+    for marker in _VECTOR_MATH_MARKERS:
+        assert marker not in sent_message
+
+    # The system prompt itself also steers toward clinical language, not vector statistics.
+    assert "clinical language" in call_kwargs["system"]
 
 
 def test_generate_hypothesis_rejects_schema_violations(db):

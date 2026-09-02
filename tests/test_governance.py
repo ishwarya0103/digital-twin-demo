@@ -95,10 +95,13 @@ def test_digital_twin_assembly_produces_audit_log_entry(db):
         patient_id="patient-1",
         emr_embedding=np.array([1.0, 2.0]),
         emr_pipeline_version="emr-v0.1.0",
+        emr_summary={"diagnoses": [], "medications": [], "symptoms": []},
         genomic_embedding=np.array([3.0]),
         genomic_pipeline_version="genomics-v0.1.0",
+        genomic_summary={"pathway_scores": {}, "ancestry_pcs": []},
         wearable_embedding=np.array([4.0, 5.0]),
         wearable_pipeline_version="wearable-v0.1.0",
+        wearable_summary={"mean_activation_score": None, "max_activation_score": None, "num_windows": 0, "interpretation": "n/a"},
     )
 
     rows = _audit_rows(db, "digital_twin_assembly", "patient-1")

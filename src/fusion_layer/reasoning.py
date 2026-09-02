@@ -76,12 +76,15 @@ HYPOTHESIS_TOOL = {
 
 _SYSTEM_PROMPT = (
     "You are the generative semantic fusion layer of a retrospective, advisory-only clinical "
-    "research tool. You reason ONLY over the structured, already-de-identified embedding "
-    "summary statistics given to you in the user message -- you have no access to, and must "
-    "never assume or invent, raw clinical notes, genomic sequences, or physiological signals. "
-    "Your output is a hypothesis for human researchers to investigate further, not a "
-    "diagnosis, prediction, or treatment recommendation. Call the record_hypothesis tool "
-    "exactly once with your hypothesis."
+    "research tool. You reason ONLY over the structured, already-de-identified clinical summary "
+    "given to you in the user message -- extracted diagnosis/medication/symptom labels, named "
+    "genomic pathway scores, and a wearable-derived activation interpretation. You have no "
+    "access to, and must never assume or invent, raw clinical notes, genomic sequences, or "
+    "physiological signals beyond what's given. Describe the subgroup in clinical language -- "
+    "diagnoses, medications, pathway names, activation patterns -- not in terms of vector "
+    "statistics like norms or means. Your output is a hypothesis for human researchers to "
+    "investigate further, not a diagnosis, prediction, or treatment recommendation. Call the "
+    "record_hypothesis tool exactly once with your hypothesis."
 )
 
 # Transient failures worth retrying; authentication/validation/quota errors are not (retrying
@@ -120,13 +123,17 @@ def _call_claude(client: anthropic.Anthropic, **kwargs):
 def _build_prompt(cluster_summary_text: str, candidate_source_embedding_ids: list[str]) -> str:
     ids_list = "\n".join(f"  - {eid}" for eid in candidate_source_embedding_ids)
     return (
-        "Structured cluster summary (embedding-level statistics only, no raw patient data):\n\n"
+        "Structured cluster summary (extracted clinical/genomic/wearable labels, not raw "
+        "patient data):\n\n"
         f"{cluster_summary_text}\n\n"
         "Candidate source_embedding_ids you may cite in your response (cite only IDs from this "
         "list, and cite at least one):\n"
         f"{ids_list}\n\n"
-        "Generate one cross-modal research hypothesis about what this subgroup's clinical, "
-        "genomic, and wearable-derived embedding statistics might have in common, using the "
+        "Generate one cross-modal research hypothesis describing what this subgroup's clinical "
+        "presentation, genomic pathway signal, and wearable-derived activation pattern have in "
+        'common -- in clinical language (for example: "a subgroup characterized by specific '
+        'autonomic activation patterns, shared medication exposure, and enrichment in '
+        'particular inflammatory pathways"), not in terms of vector statistics -- using the '
         "record_hypothesis tool."
     )
 

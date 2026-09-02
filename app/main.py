@@ -51,10 +51,54 @@ patient_id = st.selectbox("Select a patient", patient_ids)
 twin_view, hypotheses_view = st.tabs(["Digital Twin", "Hypotheses"])
 
 
-def _render_domain(label: str, domain: dict) -> None:
+def _render_emr_summary(summary: dict) -> None:
+    any_shown = False
+    for key, title in (("diagnoses", "Diagnoses"), ("medications", "Medications"), ("symptoms", "Symptoms")):
+        values = summary.get(key) or []
+        if values:
+            st.markdown(f"**{title}:** {', '.join(values)}")
+            any_shown = True
+    if not any_shown:
+        st.caption("No extracted diagnoses, medications, or symptoms.")
+
+
+def _render_genomic_summary(summary: dict) -> None:
+    pathway_scores = summary.get("pathway_scores") or {}
+    elevated = sorted(((n, s) for n, s in pathway_scores.items() if s), key=lambda kv: -abs(kv[1]))
+    if elevated:
+        st.markdown("**Elevated pathways:**")
+        for name, score in elevated:
+            st.markdown(f"- {name}: {score:+.2f}")
+    else:
+        st.caption("No elevated genomic pathway signal.")
+
+
+def _render_wearable_summary(summary: dict) -> None:
+    interpretation = summary.get("interpretation", "No wearable activation data available.")
+    mean_score = summary.get("mean_activation_score")
+    st.markdown(f"**{interpretation.capitalize()}**")
+    if mean_score is not None:
+        st.caption(f"mean activation score: {mean_score:.2f} across {summary.get('num_windows', 0)} windows")
+
+
+_SUMMARY_RENDERERS = {
+    "emr": _render_emr_summary,
+    "genomic": _render_genomic_summary,
+    "wearable": _render_wearable_summary,
+}
+
+
+def _render_domain(domain_key: str, label: str, domain: dict) -> None:
+    """Plain-language clinical summary as the primary view; the raw embedding vector (what
+    actually feeds clustering/similarity search) tucked into an expander for anyone who wants
+    the underlying numbers rather than the interpretation."""
     st.markdown(f"**{label}**")
-    st.caption(f"pipeline_version: `{domain['pipeline_version']}` -- dimension: {len(domain['embedding'])}")
-    st.line_chart(domain["embedding"])
+    st.caption(f"pipeline_version: `{domain['pipeline_version']}`")
+    _SUMMARY_RENDERERS[domain_key](domain.get("summary") or {})
+
+    with st.expander("Technical detail (raw embedding vector)"):
+        st.caption(f"dimension: {len(domain['embedding'])}")
+        st.line_chart(domain["embedding"])
 
 
 with twin_view:
@@ -71,17 +115,17 @@ with twin_view:
         with all_tab:
             col1, col2, col3 = st.columns(3)
             with col1:
-                _render_domain("EMR / Clinical State Vector", twin["emr"])
+                _render_domain("emr", "EMR / Clinical Summary", twin["emr"])
             with col2:
-                _render_domain("Genomic Pathway Profile", twin["genomic"])
+                _render_domain("genomic", "Genomic Pathway Profile", twin["genomic"])
             with col3:
-                _render_domain("Wearable Physiological Profile", twin["wearable"])
+                _render_domain("wearable", "Wearable Physiological Profile", twin["wearable"])
         with emr_tab:
-            _render_domain("EMR / Clinical State Vector", twin["emr"])
+            _render_domain("emr", "EMR / Clinical Summary", twin["emr"])
         with genomic_tab:
-            _render_domain("Genomic Pathway Profile", twin["genomic"])
+            _render_domain("genomic", "Genomic Pathway Profile", twin["genomic"])
         with wearable_tab:
-            _render_domain("Wearable Physiological Profile", twin["wearable"])
+            _render_domain("wearable", "Wearable Physiological Profile", twin["wearable"])
 
 with hypotheses_view:
     data = _get(f"/patient/{patient_id}/hypotheses")

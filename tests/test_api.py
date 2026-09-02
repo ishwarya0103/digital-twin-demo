@@ -15,6 +15,15 @@ EMR_EMBEDDING = [1.0, 2.0, 3.0]
 GENOMIC_EMBEDDING = [4.0, 5.0]
 WEARABLE_EMBEDDING = [6.0, 7.0, 8.0]
 
+EMR_SUMMARY = {"diagnoses": ["Fibromyalgia"], "medications": ["Metformin"], "symptoms": ["back pain"]}
+GENOMIC_SUMMARY = {"pathway_scores": {"Drug metabolism": 1.5}, "ancestry_pcs": [0.1, -0.2]}
+WEARABLE_SUMMARY = {
+    "mean_activation_score": 0.42,
+    "max_activation_score": 0.6,
+    "num_windows": 3,
+    "interpretation": "moderate autonomic/stress activation",
+}
+
 
 @pytest.fixture
 def db_session():
@@ -60,10 +69,13 @@ def seeded_twin(db_session):
         patient_id="patient-test",
         emr_embedding=EMR_EMBEDDING,
         emr_pipeline_version="emr-v0.1.0",
+        emr_summary=EMR_SUMMARY,
         genomic_embedding=GENOMIC_EMBEDDING,
         genomic_pipeline_version="genomics-v0.1.0",
+        genomic_summary=GENOMIC_SUMMARY,
         wearable_embedding=WEARABLE_EMBEDDING,
         wearable_pipeline_version="wearable-v0.1.0",
+        wearable_summary=WEARABLE_SUMMARY,
     )
 
 
@@ -112,14 +124,15 @@ def test_full_twin_returns_200_with_correctly_shaped_data(client, seeded_twin):
     assert data["patient_id"] == "patient-test"
     assert data["version"] == 1
 
-    for domain_key, embedding, pipeline_version in (
-        ("emr", EMR_EMBEDDING, "emr-v0.1.0"),
-        ("genomic", GENOMIC_EMBEDDING, "genomics-v0.1.0"),
-        ("wearable", WEARABLE_EMBEDDING, "wearable-v0.1.0"),
+    for domain_key, embedding, pipeline_version, summary in (
+        ("emr", EMR_EMBEDDING, "emr-v0.1.0", EMR_SUMMARY),
+        ("genomic", GENOMIC_EMBEDDING, "genomics-v0.1.0", GENOMIC_SUMMARY),
+        ("wearable", WEARABLE_EMBEDDING, "wearable-v0.1.0", WEARABLE_SUMMARY),
     ):
-        assert set(data[domain_key].keys()) == {"pipeline_version", "embedding"}
+        assert set(data[domain_key].keys()) == {"pipeline_version", "embedding", "summary"}
         assert data[domain_key]["embedding"] == embedding
         assert data[domain_key]["pipeline_version"] == pipeline_version
+        assert data[domain_key]["summary"] == summary
 
 
 def test_full_twin_returns_404_for_unknown_patient(client):
@@ -133,38 +146,54 @@ def test_full_twin_returns_404_for_unknown_patient(client):
 
 
 @pytest.mark.parametrize(
-    "domain,expected_embedding,expected_pipeline_version",
+    "domain,expected_embedding,expected_pipeline_version,expected_summary",
     [
-        ("emr", EMR_EMBEDDING, "emr-v0.1.0"),
-        ("genomic", GENOMIC_EMBEDDING, "genomics-v0.1.0"),
-        ("wearable", WEARABLE_EMBEDDING, "wearable-v0.1.0"),
+        ("emr", EMR_EMBEDDING, "emr-v0.1.0", EMR_SUMMARY),
+        ("genomic", GENOMIC_EMBEDDING, "genomics-v0.1.0", GENOMIC_SUMMARY),
+        ("wearable", WEARABLE_EMBEDDING, "wearable-v0.1.0", WEARABLE_SUMMARY),
     ],
 )
 def test_domain_endpoint_returns_200_with_correctly_shaped_data(
-    client, seeded_twin, domain, expected_embedding, expected_pipeline_version
+    client, seeded_twin, domain, expected_embedding, expected_pipeline_version, expected_summary
 ):
     response = client.get(f"/patient/patient-test/{domain}")
     assert response.status_code == 200
 
     data = response.json()
-    assert set(data.keys()) == {"patient_id", "version", "domain", "pipeline_version", "embedding"}
+    assert set(data.keys()) == {"patient_id", "version", "domain", "pipeline_version", "embedding", "summary"}
     assert data["patient_id"] == "patient-test"
     assert data["version"] == 1
     assert data["domain"] == domain
     assert data["pipeline_version"] == expected_pipeline_version
     assert data["embedding"] == expected_embedding
+    assert data["summary"] == expected_summary
 
 
 @pytest.mark.parametrize(
-    "domain,other_embeddings,other_pipeline_versions",
+    "domain,other_embeddings,other_pipeline_versions,other_summaries",
     [
-        ("emr", [GENOMIC_EMBEDDING, WEARABLE_EMBEDDING], ["genomics-v0.1.0", "wearable-v0.1.0"]),
-        ("genomic", [EMR_EMBEDDING, WEARABLE_EMBEDDING], ["emr-v0.1.0", "wearable-v0.1.0"]),
-        ("wearable", [EMR_EMBEDDING, GENOMIC_EMBEDDING], ["emr-v0.1.0", "genomics-v0.1.0"]),
+        (
+            "emr",
+            [GENOMIC_EMBEDDING, WEARABLE_EMBEDDING],
+            ["genomics-v0.1.0", "wearable-v0.1.0"],
+            [GENOMIC_SUMMARY, WEARABLE_SUMMARY],
+        ),
+        (
+            "genomic",
+            [EMR_EMBEDDING, WEARABLE_EMBEDDING],
+            ["emr-v0.1.0", "wearable-v0.1.0"],
+            [EMR_SUMMARY, WEARABLE_SUMMARY],
+        ),
+        (
+            "wearable",
+            [EMR_EMBEDDING, GENOMIC_EMBEDDING],
+            ["emr-v0.1.0", "genomics-v0.1.0"],
+            [EMR_SUMMARY, GENOMIC_SUMMARY],
+        ),
     ],
 )
 def test_domain_endpoint_never_includes_other_domains(
-    client, seeded_twin, domain, other_embeddings, other_pipeline_versions
+    client, seeded_twin, domain, other_embeddings, other_pipeline_versions, other_summaries
 ):
     response = client.get(f"/patient/patient-test/{domain}")
     data = response.json()
@@ -173,11 +202,13 @@ def test_domain_endpoint_never_includes_other_domains(
     for other_domain in {"emr", "genomic", "wearable"} - {domain}:
         assert other_domain not in data
 
-    # The single embedding/pipeline_version field never carries another domain's values.
+    # The single embedding/pipeline_version/summary field never carries another domain's values.
     for other_embedding in other_embeddings:
         assert data["embedding"] != other_embedding
     for other_pipeline_version in other_pipeline_versions:
         assert data["pipeline_version"] != other_pipeline_version
+    for other_summary in other_summaries:
+        assert data["summary"] != other_summary
 
 
 def test_domain_endpoint_returns_404_for_unknown_patient(client):

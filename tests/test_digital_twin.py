@@ -23,6 +23,15 @@ def db():
 
 PATIENT_ID = "patient-001"
 
+EMR_SUMMARY_V1 = {"diagnoses": ["Fibromyalgia"], "medications": ["Metformin"], "symptoms": ["back pain"]}
+GENOMIC_SUMMARY_V1 = {"pathway_scores": {"Drug metabolism": 1.5}, "ancestry_pcs": [0.1, -0.2]}
+WEARABLE_SUMMARY_V1 = {
+    "mean_activation_score": 0.42,
+    "max_activation_score": 0.6,
+    "num_windows": 3,
+    "interpretation": "moderate autonomic/stress activation",
+}
+
 
 def _twin_v1(db):
     return assemble_and_store_twin(
@@ -30,10 +39,13 @@ def _twin_v1(db):
         patient_id=PATIENT_ID,
         emr_embedding=np.array([1.0, 2.0, 3.0]),
         emr_pipeline_version="emr-v0.1.0",
+        emr_summary=EMR_SUMMARY_V1,
         genomic_embedding=np.array([4.0, 5.0]),
         genomic_pipeline_version="genomics-v0.1.0",
+        genomic_summary=GENOMIC_SUMMARY_V1,
         wearable_embedding=np.array([6.0, 7.0, 8.0, 9.0]),
         wearable_pipeline_version="wearable-v0.1.0",
+        wearable_summary=WEARABLE_SUMMARY_V1,
     )
 
 
@@ -56,6 +68,20 @@ def test_stored_twin_contains_all_three_embeddings_labeled_by_source(db):
     assert fetched.wearable_embedding == [6.0, 7.0, 8.0, 9.0]
 
 
+def test_stored_twin_contains_labeled_clinical_summary_per_domain(db):
+    twin = _twin_v1(db)
+
+    assert twin.emr_summary == EMR_SUMMARY_V1
+    assert twin.genomic_summary == GENOMIC_SUMMARY_V1
+    assert twin.wearable_summary == WEARABLE_SUMMARY_V1
+
+    # Round-trips through storage, not just the in-memory object.
+    fetched = get_twin(db, PATIENT_ID)
+    assert fetched.emr_summary == EMR_SUMMARY_V1
+    assert fetched.genomic_summary == GENOMIC_SUMMARY_V1
+    assert fetched.wearable_summary == WEARABLE_SUMMARY_V1
+
+
 def test_second_version_does_not_delete_or_alter_first(db):
     v1 = _twin_v1(db)
     assert v1.version == 1
@@ -65,10 +91,13 @@ def test_second_version_does_not_delete_or_alter_first(db):
         patient_id=PATIENT_ID,
         emr_embedding=np.array([10.0, 20.0, 30.0]),
         emr_pipeline_version="emr-v0.2.0",
+        emr_summary={"diagnoses": ["Essential hypertension"], "medications": [], "symptoms": []},
         genomic_embedding=np.array([40.0, 50.0]),
         genomic_pipeline_version="genomics-v0.1.0",
+        genomic_summary=GENOMIC_SUMMARY_V1,
         wearable_embedding=np.array([60.0, 70.0, 80.0, 90.0]),
         wearable_pipeline_version="wearable-v0.1.0",
+        wearable_summary=WEARABLE_SUMMARY_V1,
     )
     assert v2.version == 2
 
@@ -77,10 +106,12 @@ def test_second_version_does_not_delete_or_alter_first(db):
     assert fetched_v1 is not None
     assert fetched_v1.emr_embedding == [1.0, 2.0, 3.0]
     assert fetched_v1.emr_pipeline_version == "emr-v0.1.0"
+    assert fetched_v1.emr_summary == EMR_SUMMARY_V1
 
     fetched_v2 = get_twin(db, PATIENT_ID, version=2)
     assert fetched_v2.emr_embedding == [10.0, 20.0, 30.0]
     assert fetched_v2.emr_pipeline_version == "emr-v0.2.0"
+    assert fetched_v2.emr_summary == {"diagnoses": ["Essential hypertension"], "medications": [], "symptoms": []}
 
     # Both rows genuinely exist side by side.
     assert db.query(type(v1)).filter_by(patient_id=PATIENT_ID).count() == 2
@@ -96,17 +127,20 @@ def test_domain_filtered_retrieval_returns_only_requested_domain(db):
     assert genomic_only["domain"] == "genomic"
     assert genomic_only["embedding"] == [4.0, 5.0]
     assert genomic_only["pipeline_version"] == "genomics-v0.1.0"
+    assert genomic_only["summary"] == GENOMIC_SUMMARY_V1
     assert "emr_embedding" not in genomic_only
     assert "wearable_embedding" not in genomic_only
-    assert set(genomic_only.keys()) == {"patient_id", "version", "domain", "pipeline_version", "embedding"}
+    assert set(genomic_only.keys()) == {"patient_id", "version", "domain", "pipeline_version", "embedding", "summary"}
 
     emr_only = get_twin_domain(db, PATIENT_ID, "emr")
     assert emr_only["embedding"] == [1.0, 2.0, 3.0]
     assert emr_only["pipeline_version"] == "emr-v0.1.0"
+    assert emr_only["summary"] == EMR_SUMMARY_V1
 
     wearable_only = get_twin_domain(db, PATIENT_ID, "wearable")
     assert wearable_only["embedding"] == [6.0, 7.0, 8.0, 9.0]
     assert wearable_only["pipeline_version"] == "wearable-v0.1.0"
+    assert wearable_only["summary"] == WEARABLE_SUMMARY_V1
 
 
 def test_domain_filtered_retrieval_rejects_unknown_domain(db):
